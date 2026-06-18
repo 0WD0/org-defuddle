@@ -17382,8 +17382,10 @@ fn math_info(node: &NodeRef, element: &ElementData) -> Option<MathInfo> {
         return MathInfo::new(node.text_contents(), is_block);
     }
 
-    if let Some(latex) = data_latex {
-        return MathInfo::new(latex, is_block);
+    if tag != "math" {
+        if let Some(latex) = data_latex.clone() {
+            return MathInfo::new(latex, is_block);
+        }
     }
 
     if let Some(latex) = data_entry.filter(|latex| is_math_entry_attr(&class, latex)) {
@@ -17410,7 +17412,10 @@ fn math_info(node: &NodeRef, element: &ElementData) -> Option<MathInfo> {
         {
             return MathInfo::new(latex, is_block);
         }
-        return mathml_to_latex(node)
+        return has_mathml_element_children(node)
+            .then(|| mathml_to_latex(node))
+            .flatten()
+            .or(data_latex)
             .or_else(|| Some(node.text_contents()))
             .and_then(|latex| MathInfo::new(latex, is_block));
     }
@@ -17451,6 +17456,39 @@ fn mathml_to_latex(node: &NodeRef) -> Option<String> {
     render_mathml_node(node).and_then(|latex| {
         let latex = normalize_mathml_latex(&latex);
         (!latex.is_empty()).then_some(latex)
+    })
+}
+
+fn has_mathml_element_children(node: &NodeRef) -> bool {
+    mathml_element_children(node).into_iter().any(|child| {
+        matches!(
+            tag_name(&child).as_deref(),
+            Some(
+                "semantics"
+                    | "mrow"
+                    | "mstyle"
+                    | "mpadded"
+                    | "mphantom"
+                    | "menclose"
+                    | "mi"
+                    | "mn"
+                    | "mo"
+                    | "mtext"
+                    | "msub"
+                    | "msup"
+                    | "msubsup"
+                    | "mfrac"
+                    | "msqrt"
+                    | "mroot"
+                    | "munder"
+                    | "mover"
+                    | "munderover"
+                    | "mtable"
+                    | "mtr"
+                    | "mlabeledtr"
+                    | "mtd"
+            )
+        )
     })
 }
 
@@ -18630,6 +18668,11 @@ impl MarkdownRenderer {
     }
 
     fn render_element(&mut self, node: &NodeRef, element: &ElementData, inline: bool) {
+        if let Some(math) = math_info(node, element) {
+            self.render_math(node, math);
+            return;
+        }
+
         let tag = element.name.local.as_ref();
         match tag {
             "script" | "style" | "noscript" | "template" => {}
@@ -18838,6 +18881,20 @@ impl MarkdownRenderer {
             self.out.push('\n');
         }
         self.out.push('\n');
+    }
+
+    fn render_math(&mut self, node: &NodeRef, math: MathInfo) {
+        if math.is_block || is_standalone_node_in_block(node) {
+            self.ensure_blank_line();
+            self.out.push_str("$$\n");
+            self.out.push_str(&math.latex);
+            self.out.push_str("\n$$\n\n");
+        } else {
+            self.ensure_inline_space("$");
+            self.out.push('$');
+            self.out.push_str(&math.latex);
+            self.out.push('$');
+        }
     }
 
     fn render_fenced_code(&mut self, node: &NodeRef) {
@@ -30428,6 +30485,98 @@ line break text.">
         assert!(escaped_pipe_header.contains("A \\| B"));
         assert!(escaped_pipe_header.contains("| --- | --- |"));
         assert!(!escaped_pipe_header.contains("| --- | --- | --- |"));
+    }
+
+    #[test]
+    fn markdown_conversion_renders_math_like_upstream() {
+        let mathml_preferred = html_fragment_to_markdown(
+            r#"<article><p>
+              Test
+              <math data-latex="fan-outfan-in">
+                <mrow>
+                  <msqrt><mi>x</mi></msqrt>
+                  <mo>&#x2190;</mo>
+                  <mi>y</mi>
+                </mrow>
+              </math>
+            </p></article>"#,
+        );
+        assert!(mathml_preferred.contains("\\sqrt"));
+        assert!(mathml_preferred.contains("\\leftarrow"));
+        assert!(!mathml_preferred.contains("fan-outfan-in"));
+
+        let complex_mathml = html_fragment_to_markdown(
+            r#"<article><p>
+              <math display="inline" data-latex="rt(theta)=degraded">
+                <mrow>
+                  <msub><mi>r</mi><mi>t</mi></msub>
+                  <mo stretchy="false">(</mo><mi>&#x03B8;</mi><mo stretchy="false">)</mo>
+                  <mo>=</mo>
+                  <mfrac>
+                    <mrow>
+                      <msub><mi>&#x03C0;</mi><mrow><mi>&#x03B8;</mi></mrow></msub>
+                      <mo stretchy="false">(</mo>
+                      <msub><mi>a</mi><mi>t</mi></msub>
+                      <mo stretchy="false">|</mo>
+                      <msub><mi>s</mi><mi>t</mi></msub>
+                      <mo stretchy="false">)</mo>
+                    </mrow>
+                    <mrow>
+                      <msub>
+                        <mi>&#x03C0;</mi>
+                        <mrow><msub><mi>&#x03B8;</mi><mrow><mtext>old</mtext></mrow></msub></mrow>
+                      </msub>
+                      <mo stretchy="false">(</mo>
+                      <msub><mi>a</mi><mi>t</mi></msub>
+                      <mo stretchy="false">|</mo>
+                      <msub><mi>s</mi><mi>t</mi></msub>
+                      <mo stretchy="false">)</mo>
+                    </mrow>
+                  </mfrac>
+                </mrow>
+              </math>
+            </p></article>"#,
+        );
+        assert!(complex_mathml.contains("$$"));
+        assert!(complex_mathml.contains("\\frac"));
+        assert!(complex_mathml.contains("r_{t}"));
+        assert!(complex_mathml.contains("\\pi_{\\theta}"));
+        assert!(complex_mathml.contains("\\theta_{\\text{old}}"));
+        assert!(!complex_mathml.contains("rt(theta)=degraded"));
+
+        let aligned_mathml = html_fragment_to_markdown(
+            r#"<article><p>
+              <math display="block">
+                <mtable>
+                  <mtr><mtd><mi>a</mi></mtd><mtd><mo>=</mo></mtd><mtd><mi>b</mi></mtd></mtr>
+                  <mtr><mtd><mi>c</mi></mtd><mtd><mo>=</mo></mtd><mtd><mi>d</mi></mtd></mtr>
+                </mtable>
+              </math>
+            </p></article>"#,
+        );
+        assert!(aligned_mathml.contains("$$"));
+        assert!(aligned_mathml.contains("\\begin{aligned}"));
+        assert!(aligned_mathml.contains('&'));
+        assert!(aligned_mathml.contains("\\\\"));
+        assert!(aligned_mathml.contains("\\end{aligned}"));
+
+        let paragraph_only_inline = html_fragment_to_markdown(
+            r#"<article><p><math display="inline" data-latex="x^2">x2</math></p></article>"#,
+        );
+        assert_eq!(paragraph_only_inline.trim(), "$$\nx^2\n$$");
+
+        let inline_data_latex = html_fragment_to_markdown(
+            r#"<article><p>Value <math data-latex="x^2">x2</math> now.</p></article>"#,
+        );
+        assert!(inline_data_latex.contains("Value $x^2$ now."));
+
+        let latex = r#"\begin{align*}a&=b\\c&=d\end{align*}"#;
+        let existing_environment = html_fragment_to_markdown(&format!(
+            r#"<article><p><math data-latex="{latex}">{latex}</math></p></article>"#
+        ));
+        assert!(existing_environment.contains("\\begin{align*}"));
+        assert!(existing_environment.contains("\\end{align*}"));
+        assert!(!existing_environment.contains("\\begin{aligned}"));
     }
 
     #[test]

@@ -1,0 +1,670 @@
+#+title: org-defuddle
+
+~org-defuddle~ is intended to be a Rust rewrite of [[https://github.com/kepano/defuddle][kepano/defuddle]] with an
+Emacs dynamic module frontend that inserts extracted readable content into Org.
+
+The current reference snapshot inspected during scaffolding is upstream commit
+~19520ad~. The long-term goal is feature parity with defuddle's extraction
+pipeline: metadata, schema.org fallback, DOM cleanup, scoring, site-specific
+extractors, media handling, footnotes, math/code normalization, and Org content
+conversion.
+
+* Architecture
+
+- ~crates/org-defuddle-core~: Rust extraction core. It owns HTML parsing, DOM
+  cleanup, metadata extraction, content scoring, and HTML-to-Org conversion.
+- ~crates/org-defuddle-module~: Emacs dynamic module exposing coarse-grained
+  calls into the Rust core.
+- ~crates/org-defuddle-cli~: Rust command-line wrapper for URL, file, and stdin
+  parsing with Org default output plus JSON, frontmatter, property-style, and
+  compatibility Markdown output.
+- ~org-defuddle.el~: Emacs package frontend for loading the module,
+  fetching URLs, parsing buffers, and inserting Org.
+
+The dynamic module boundary is deliberately coarse:
+
+#+begin_src emacs-lisp
+(org-defuddle-parse-html html url)
+;; => (:title ... :url ... :word_count ... :html ... :org ...)
+
+(org-defuddle-parse-html html url '(:include-images nil))
+;; => same plist shape, with content images omitted from :html and :org
+
+(org-defuddle-parse-html html url '(:remove-small-images nil))
+;; => same plist shape, preserving small icons and unresolved placeholders
+
+(org-defuddle-parse-html html url '(:content-selector "article.post"))
+;; => same plist shape, using the matching element as main content
+
+(org-defuddle-parse-html html url '(:include-replies nil))
+;; => same plist shape, omitting supported replies/comments
+
+(org-defuddle-parse-html html url '(:remove-hidden-elements nil))
+;; => same plist shape, preserving display:none/hidden content
+
+(org-defuddle-parse-html html url '(:remove-exact-selectors nil))
+;; => same plist shape, preserving exact selector matches such as footers
+
+(org-defuddle-parse-html html url '(:remove-partial-selectors nil))
+;; => same plist shape, preserving partial selector matches such as related blocks
+
+(org-defuddle-parse-html html url '(:remove-content-patterns nil))
+;; => same plist shape, preserving read-time/related-card pattern content
+
+(org-defuddle-parse-html html url '(:remove-low-scoring nil))
+;; => same plist shape, preserving blocks removed by low-score heuristics
+#+end_src
+
+* Build
+
+#+begin_src sh
+cargo build --release -p org-defuddle-module
+cargo build --release -p org-defuddle-cli
+#+end_src
+
+The compiled module is expected at one of:
+
+- macOS: ~target/release/liborg_defuddle_module.dylib~
+- GNU/Linux: ~target/release/liborg_defuddle_module.so~
+- Windows: ~target/release/org_defuddle_module.dll~
+
+The CLI binary is built at ~target/release/org-defuddle~.
+
+* Emacs Usage
+
+#+begin_src emacs-lisp
+(add-to-list 'load-path "~/repos/org-defuddle")
+(require 'org-defuddle)
+
+(org-defuddle-url-to-org "https://example.com/post")
+#+end_src
+
+* CLI Usage
+
+The Rust CLI supports upstream-style ~parse~ options for URLs, local HTML
+files, and stdin:
+
+#+begin_src sh
+target/release/org-defuddle parse https://example.com/post
+target/release/org-defuddle parse article.html
+target/release/org-defuddle parse article.html --json
+target/release/org-defuddle parse article.html --markdown
+target/release/org-defuddle parse article.html --separate-markdown --json
+target/release/org-defuddle parse article.html --frontmatter
+target/release/org-defuddle parse article.html --property title
+target/release/org-defuddle parse article.html --property contentMarkdown
+target/release/org-defuddle parse article.html --output article.org
+#+end_src
+
+CLI URL fetching includes a defuddle-style user agent, optional
+~--user-agent~, optional ~--lang~ as ~Accept-Language~, HTML content-type
+validation, a 5MB response limit, redirects, charset decoding, proxy
+environment variables, and ~NO_PROXY~ matching. Full Turndown parity and the
+rest of defuddle's Node fetch layer are still tracked as parity gaps. If a URL
+extraction is empty and the user did not set ~--user-agent~, the CLI retries
+once with defuddle's bot user agent and can recover raw Markdown from the
+pre-DOM response body.
+
+Images are included by default.  To omit images from extracted Org output:
+
+#+begin_src emacs-lisp
+(setq org-defuddle-include-images nil)
+
+;; Or override per call:
+(org-defuddle-html-to-org html "https://example.com/article" '(:include-images nil))
+
+;; Upstream-compatible inverse spelling:
+(org-defuddle-html-to-org html "https://example.com/article" '(:remove-images t))
+#+end_src
+
+Small images and unresolved image placeholders are removed by default.  To keep
+them:
+
+#+begin_src emacs-lisp
+(setq org-defuddle-remove-small-images nil)
+
+;; Or override per call:
+(org-defuddle-html-to-org html
+                          "https://example.com/article"
+                          '(:remove-small-images nil))
+#+end_src
+
+To bypass automatic main-content detection and use a specific CSS selector:
+
+#+begin_src emacs-lisp
+(setq org-defuddle-content-selector "article.post-content")
+
+;; Or override per call:
+(org-defuddle-html-to-org html
+                          "https://example.com/article"
+                          '(:content-selector "main article"))
+#+end_src
+
+Site-specific replies and comments are included by default.  To omit them:
+
+#+begin_src emacs-lisp
+(setq org-defuddle-include-replies nil)
+
+;; Or override per call:
+(org-defuddle-html-to-org html "https://example.com/post" '(:include-replies nil))
+#+end_src
+
+API transcript extractors use a stable default language order.  To prefer a
+specific language where the site exposes multiple tracks:
+
+#+begin_src emacs-lisp
+(setq org-defuddle-language "en")
+
+;; Or override per URL call:
+(org-defuddle-url-to-org "https://www.bilibili.com/video/BV1nNkFBMEDS"
+                         '(:language "zh-cn"))
+
+(org-defuddle-url-to-org "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                         '(:language "en"))
+#+end_src
+
+URL extraction uses supported site APIs and alternate hosts by default for
+content that is not usually present in raw HTML, such as YouTube/Bilibili
+transcripts and Reddit comments.  To force the original URL HTML path:
+
+#+begin_src emacs-lisp
+(setq org-defuddle-use-async nil)
+
+;; Or override per URL call:
+(org-defuddle-url-to-org "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                         '(:use-async nil))
+#+end_src
+
+HTML standardization is enabled by default.  To preserve more of the original
+HTML structure before Org rendering:
+
+#+begin_src emacs-lisp
+(setq org-defuddle-standardize nil)
+
+;; Or override per call:
+(org-defuddle-html-to-org html
+                          "https://example.com/article"
+                          '(:standardize nil))
+#+end_src
+
+Debug and profiling diagnostics are disabled by default.  To include upstream
+style debug/profile fields in JSON output:
+
+#+begin_src emacs-lisp
+(org-defuddle-parse-html html
+                         "https://example.com/article"
+                         '(:debug t :profile t))
+#+end_src
+
+YAML frontmatter is omitted by default.  To prepend upstream-style frontmatter
+to Org output:
+
+#+begin_src emacs-lisp
+(setq org-defuddle-frontmatter t)
+
+;; Or override per call:
+(org-defuddle-html-to-org html
+                          "https://example.com/article"
+                          '(:frontmatter t))
+#+end_src
+
+To extract a single upstream-style response property:
+
+#+begin_src emacs-lisp
+(org-defuddle-parse-html-property html
+                                  "title"
+                                  "https://example.com/article")
+
+(org-defuddle-parse-html-property html
+                                  "wordCount"
+                                  "https://example.com/article")
+#+end_src
+
+Hidden elements are removed by default.  To preserve hidden content:
+
+#+begin_src emacs-lisp
+(setq org-defuddle-remove-hidden-elements nil)
+
+;; Or override per call:
+(org-defuddle-html-to-org html
+                          "https://example.com/article"
+                          '(:remove-hidden-elements nil))
+#+end_src
+
+Known noise selectors are removed by default.  To preserve exact or partial
+selector matches:
+
+#+begin_src emacs-lisp
+(setq org-defuddle-remove-exact-selectors nil)
+(setq org-defuddle-remove-partial-selectors nil)
+
+;; Or override per call:
+(org-defuddle-html-to-org html
+                          "https://example.com/article"
+                          '(:remove-exact-selectors nil
+                            :remove-partial-selectors nil))
+#+end_src
+
+Content-pattern cleanup is enabled by default.  To preserve read-time labels,
+related sections, and similar pattern-matched blocks:
+
+#+begin_src emacs-lisp
+(setq org-defuddle-remove-content-patterns nil)
+
+;; Or override per call:
+(org-defuddle-html-to-org html
+                          "https://example.com/article"
+                          '(:remove-content-patterns nil))
+#+end_src
+
+Low-scoring block removal is enabled by default.  To preserve blocks that look
+like navigation, recommendation, or listing clutter:
+
+#+begin_src emacs-lisp
+(setq org-defuddle-remove-low-scoring nil)
+
+;; Or override per call:
+(org-defuddle-html-to-org html
+                          "https://example.com/article"
+                          '(:remove-low-scoring nil))
+#+end_src
+
+For local HTML:
+
+#+begin_src emacs-lisp
+(with-temp-buffer
+  (insert-file-contents "article.html")
+  (org-defuddle-buffer-to-org "https://example.com/article"))
+#+end_src
+
+* Current Status
+
+This repository has broad Org-extraction parity for the inspected upstream
+defuddle fixture set, but it is not full public API/CLI parity with defuddle.
+The smoke harness currently covers 202 selected upstream fixtures out of 202
+expected fixture files in the inspected defuddle snapshot.
+
+Known remaining gaps:
+
+- Org is the primary output. First-pass Markdown exists only for upstream
+  compatibility through ~contentMarkdown~, ~separateMarkdown~,
+  ~:separate-markdown~, and CLI ~--separate-markdown~/~--markdown~, but it is
+  not yet full Turndown parity. The Rust CLI covers URL/local HTML/stdin
+  parsing with JSON, YAML frontmatter, output-file, debug, property-style
+  options, and compatibility Markdown output.
+- Debug/profile fields are exposed for the Rust core, dynamic module, and Elisp
+  JSON path, and report removals from hidden-element, upstream-style
+  ~removeBySelector~ selector cleanup,
+  upstream-style ~scoreAndRemove~ low-scoring cleanup, and upstream-style
+  ~removeByContentPattern~ cleanup. Coverage is still narrower than upstream's
+  full debug removals.
+- Core low-content retry is deliberately conservative: it recovers empty-body
+  extractions but does not replace already extracted short articles with noisier
+  fallback passes.
+- URL fetching exists in both Emacs and the Rust CLI, but the Emacs URL path
+  still uses Emacs ~url-retrieve~ rather than the Rust CLI fetch stack.
+
+Implemented:
+
+- HTML parsing with ~kuchiki~.
+- Basic metadata extraction from title, canonical link, OpenGraph/Twitter meta,
+  simple JSON-LD, and common author/date fields. Site-name priority follows
+  defuddle's schema.org publisher preference before ~og:site_name~. Selected
+  proximity fallbacks extract H1-adjacent date/byline blocks, including header
+  dates above the H1 before suggested-post timestamps, when structured metadata
+  is missing. Short title suffixes that match the page domain, or that match an
+  H1-prefixed title and visible site navigation, are used as site-name
+  fallbacks. Selected documentation-style suffixes are stripped when the H1
+  already provides the article title, and short OpenGraph/Twitter titles that
+  look like brand names can fall back to the visible H1. Placeholder metadata values such as
+  unresolved template output or punctuation-only names are skipped in fallback
+  chains, and author values with URL suffixes are cleaned after byline cleanup.
+  Date-only byline fallbacks are not treated as authors.
+  Standalone pre-content ~time[datetime]~ nodes and selected short visible
+  date metadata in main/article content are used as published metadata while
+  suggested-post/sidebar dates are avoided; inline time values remain in prose.
+- Basic unsafe/noise DOM removal, conservative hidden-element removal that
+  preserves substantial aria-hidden article content and substantive inline SVG,
+  removes selected Tailwind-style hidden machine text, selected dialog/overlay
+  shells that wrap real post content, email-style metadata header blocks, and
+  short signature footers, plus orphan heading cleanup that preserves selected
+  heading-only wrappers before real content, content-marked article heading
+  wrappers, and parent headings that introduce lower-level sections.
+- A first content-pattern cleanup pass for common defuddle cases: same-page
+  table-of-contents lists, leading breadcrumb blocks, section breadcrumb/back-navigation links, pre-content
+  standalone date, read-time, date+read-time, author/title/description metadata, short blog metadata lists, trailing external link lists, standalone author and author/date bylines, non-semantic hero image
+  headers, short pre-content subtitle/dek/standfirst nodes, short
+  linked/span/paragraph eyebrow category labels before article titles, leading header separators,
+  short pre-heading promotional banner links, short category/topic badge blocks,
+  short date/category post metadata, "listen to this article" and short pre-content audio/video player widgets, timezone widgets, standalone
+  social counters, social engagement avatar clusters, inline comment widgets, live-blog status labels, explicit
+  ~nocontent~ blocks, selected front matter author/abstract blocks, MediaWiki-style
+  page chrome such as infoboxes/edit links/site subtitles, MediaWiki-style
+  See also sections, selected trailing heading sections, and trailing metadata/share, author-contact/share rails, short author/share widgets, CTA, subscribe/related/link-cluster/card-grid/about-author
+  sections, newsletter panels including "never miss" update prompts, boilerplate/comment-policy tails, and investment/legal disclaimer footers, including related article-card grids without explicit grid class names.
+- Configurable content-pattern cleanup through a ~removeContentPatterns~-style
+  option exposed as ~:remove-content-patterns~ in Elisp. Debug/profile records
+  from this pass use the upstream ~removeByContentPattern~ step name.
+- Configurable low-score block cleanup through a ~removeLowScoring~-style
+  option exposed as ~:remove-low-scoring~ in Elisp. Debug removals from this
+  pass use the upstream ~scoreAndRemove~ step name.
+- Configurable small-image cleanup through a ~removeSmallImages~-style option
+  exposed as ~:remove-small-images~ in Elisp.
+- Configurable Org-oriented standardization through a ~standardize~-style
+  option across the Rust core, dynamic module, and Elisp wrappers.
+- Debug and profiling diagnostics through ~debug~- and ~profile~-style options
+  across the Rust core, dynamic module, and Elisp JSON wrapper, including
+  selected removal records from hidden-element, selector, upstream-style
+  ~scoreAndRemove~ low-scoring, and ~removeByContentPattern~ cleanup.
+- YAML frontmatter generation through a ~frontmatter~-style option across the
+  Rust core, dynamic module, and Elisp wrappers.
+- Compatibility Markdown generation through ~markdown~- and
+  ~separateMarkdown~-style options across the Rust core, dynamic module, Elisp
+  wrappers, and CLI. The Rust response exposes the upstream-style
+  ~contentMarkdown~ field while preserving Org as the primary output.
+- Upstream-compatible JSON response names at the CLI and dynamic-module
+  boundary, including ~content~, ~wordCount~, ~parseTime~, and
+  ~contentMarkdown~, while retaining org-defuddle extensions such as ~org~,
+  ~html~, ~frontmatter~, and snake-case aliases. HTML parse JSON responses also
+  expose real upstream-style ~schemaOrgData~ and ~metaTags~ values from the
+  original document head, plus ~extractorType~ and non-standard extractor
+  ~variables~ such as transcript or selected video-part metadata when a
+  site-specific extractor produces them.
+- Property-style response selection for upstream names such as ~title~,
+  ~domain~, ~wordCount~, ~parseTime~, and ~contentMarkdown~, with snake-case
+  aliases for org-defuddle JSON fields.
+- A Rust CLI ~parse~ command for URLs, local HTML files, and stdin with JSON,
+  compatibility Markdown, frontmatter, output-file, debug, and property-style
+  options. URL
+  fetching validates HTML response types, enforces a 5MB response limit,
+  follows redirects, forwards language/user-agent options, reads
+  ~HTTP_PROXY~/~HTTPS_PROXY~/~ALL_PROXY~ with ~NO_PROXY~ exclusions, and
+  decodes declared or detected charsets. Empty URL extractions retry once with
+  defuddle's bot user agent unless the user supplied ~--user-agent~; when the
+  bot response contains raw Markdown, the CLI extracts it before DOM parsing
+  can collapse whitespace.
+- Org footnote rendering for several common defuddle patterns, including
+  ~fn:/fnref:~ references, Google Docs ~ftnt~ exports, WordPress block
+  footnotes, Easy Footnotes, hidden footnote sections, MediaWiki
+  ~cite_ref/cite_note~ references with backlink cleanup, numeric
+  reference-anchor blocks, ~fnN~ id variants, named ~Footnote_N/FnAnchor_N~
+  anchors, paragraph-class footnotes, inline footnote spans, O'Reilly-style
+  ~data-type=noteref/footnote~ pairs, Texinfo ~FOOTN/DOCFN~ footnotes,
+  dhammatalks-style ~.note~ footnote blocks, loose paragraph footnotes with leading
+  numeric ~sup~/~strong~ markers,
+  selected loose footnote continuation blocks/lists, heading-delimited loose
+  note sections, external footnote sections outside the selected main article,
+  child-anchor reference lists, aside ordered-list footnotes, pulldown-cmark
+  footnote-definition blocks, Org-mode CSS sidenotes, hidden data-definition aside footnotes,
+  footnote-definition/sidenote pairs, margin-toggle footnote containers,
+  doc-endnote/doc-noteref pairs, and Word HTML ~_ftn/_ftnref~ exports.
+- Relative ~href~, ~src~, ~poster~, and ~srcset~ URL resolution against the
+  extracted page URL.
+- Image normalization for selected defuddle cases: lazy image attributes,
+  ~picture/source~ fallbacks including source-only ~picture~ elements,
+  standalone image ~source~ elements, and cleanup of promoted ~picture source~
+  nodes, React-style ~srcSet~,
+  noscript fallbacks, non-standard lazy image attributes that contain direct
+  image URLs or ~srcset~ values,
+  base64/SVG placeholders with resolvable alternatives, duplicate figure
+  images with upstream-style best-resolution selection, adjacent lazy-load
+  duplicate image pairs, metadata cover/hero image deduplication with
+  high-resolution ~srcset~ upgrades, comma-bearing CDN ~srcset~ parsing, and
+  preservation of distinct screenshots that share generic alt text. Adjacent
+  image or linked-thumbnail caption/credit classes, inline ~p~/~span~ image
+  captions, title/alt/text-style caption classes and visible ~title~/
+  ~aria-label~ caption candidates in single-media containers, meaningful image
+  ~alt~ fallback captions, and nested single-image figure caption wrappers are
+  standardized into figure and figcaption blocks with duplicate caption text
+  collapsed. Short labels, bare URLs, image filenames, numeric strings, and
+  ISO-style date strings are ignored as non-meaningful media captions. Simple
+  ~span~ wrappers around a single image or linked image are unwrapped before
+  adjacent caption standardization, while prose-bearing span/layout wrappers are
+  preserved. Custom
+  ~uni-image-full-width~ image elements
+  are normalized to ordinary figure blocks. Empty links that contain only
+  small SVG icons are removed as decorative UI.
+- Linked-image rendering and selected lightbox/gallery cleanup: linked
+  thumbnails are preserved as Org links, Mastodon multi-image media galleries
+  render all linked original images, and same-container full-size duplicate
+  images are removed.
+- Selected media/embed handling: YouTube and YouTube-nocookie embeds are
+  normalized to watch-page Org links, ~lite-youtube~ custom elements are
+  converted through the same embed path, Twitter/X embeds are normalized to X
+  status links, lazy iframe ~data-src~ style sources are promoted before
+  rendering, playable ~video~ elements are given controls, direct
+  ~video~/~audio~ sources are preserved as Org links, and generic iframes with
+  a ~src~ are preserved as Org HTML export blocks. Obsolete plugin embeds
+  such as ~object~, ~embed~, and ~applet~ are removed during media cleanup.
+  Selected noisy media iframes and players, including known paywall, comment,
+  TTS/audio-player, and empty iframe shells, are removed by selector cleanup.
+- Defuddle-inspired content container scoring, including selected non-semantic
+  ~article/content~ id/class containers used by page builders and short
+  article-card/listing avoidance during main-content selection.
+- Low-content retry for empty-body extractions, with conservative fallback passes
+  that relax partial selector, hidden element, scoring, and content-pattern
+  cleanup without replacing already extracted short articles.
+- Selected schema.org text fallback: when ~articleBody~ or ~text~ contains
+  substantially more content than the scored extraction, the core uses the
+  matching DOM content container or falls back to the schema text.
+- Selected visible description lede recovery when a page's exact meta
+  description appears in a standalone paragraph outside the selected main
+  content container.
+- React streaming SSR segment materialization for selected pages whose article
+  body is delivered through ~$RC~ scripts or hidden streamed segments.
+- Steam-style data-attribute event extraction, including selected BBCode
+  paragraph, URL, and YouTube preview rendering.
+- Selected MediaWiki/Wikipedia metadata normalization, including known site
+  names, title suffix cleanup, footer last-modified dates, and IPA
+  pronunciation span preservation.
+- Selected Hacker News extraction for story comment pages, direct comment
+  permalinks, and listing pages.
+- Selected GitHub issue and pull-request extraction, including rendered Markdown
+  bodies, PR review/conversation comments, and GitHub chrome removal.
+- Selected LinkedIn post extraction, including top-level commentary, media/video
+  thumbnails, quoted posts, nested comments, reaction counts, and reply
+  inclusion controls.
+- Selected YouTube extraction, including VideoObject/OG/player metadata,
+  canonical watch links, description rendering, desktop/mobile DOM transcripts,
+  Innertube iOS/Android/Web player fallback, timedtext srv3/simple XML parsing,
+  next-API and mobile-DOM chapter headings, caption-language ranking, safe
+  caption URL validation, and upstream-style transcript/speaker grouping.
+- Selected Bilibili API extraction, including view/player API orchestration from
+  Elisp, Rust-owned page/cid selection, subtitle-track ranking, safe subtitle URL
+  validation, transcript grouping, CJK text concatenation, embed rendering,
+  video metadata, and preferred language selection through ~:language~.
+- Selected C2 Wiki API extraction, including CamelCase page-title cleanup, last
+  edit metadata, and C2 wiki markup rendering for lists, definition items,
+  preformatted blocks, bold/italic spans, links, image URLs, and separators.
+- Selected Substack article and note extraction, including custom-domain article
+  bodies, schema publisher site names, FootnoteToDOM conversion, note permalink
+  selection, media links, and share/subscribe chrome cleanup.
+- Selected ChatGPT shared-conversation extraction, including speaker labels,
+  split assistant-turn merging, citation footnotes, and Thought/source chrome
+  cleanup.
+- Selected Claude shared-conversation extraction, including user/assistant
+  speaker labels, standard Markdown response selection, and Claude title
+  fallback metadata.
+- Selected Gemini conversation extraction, including user/model speaker labels,
+  extended response selection, browse-item source footnotes, and Gemini title
+  fallback metadata.
+- Selected Grok conversation extraction, including user/assistant speaker
+  labels, message-link source footnotes, DeepSearch chrome cleanup, and Grok
+  title fallback metadata.
+- Selected X/Twitter article and conversation extraction, including long-form
+  article metadata, status-URL author fallbacks, large media URLs, interaction
+  count/chrome removal, localized conversation replies, and async API fallback
+  parsing for FxTwitter tweet/article JSON and X/Twitter oEmbed JSON, including
+  full-text facets, media, article blocks, code, and emoji-safe URL facet
+  offsets.
+- Selected Bluesky thread extraction, including same-author thread continuations,
+  optional nested replies, profile-link cleanup, feed-fullsize images, link cards,
+  quoted posts, and Bluesky metadata.
+- Selected Threads extraction, including pagelet threads, server-rendered region
+  fallback, hydration JSON replies, redirect-link cleanup, media cards, quoted
+  posts, and optional nested replies.
+- Selected Medium extraction, including article selection, publication metadata,
+  subtitle descriptions, image button unwrapping, subscription/engagement chrome
+  cleanup, and relative URL normalization.
+- Selected Discourse topic extraction, including OP selection, optional replies,
+  reply dates/permalinks/likes, topic-title cleanup, cooked-content cleanup, and
+  forum metadata.
+- Selected New York Times extraction from preloaded article data, including
+  headline/byline/summary metadata, paragraph and heading blocks, inline
+  formatting and links, image rendition selection, captions, and JS undefined
+  cleanup.
+- Selected LWN.net extraction, including article/comment separation, nested
+  comments, comment dates/permalinks, duplicate comment-title suppression, and
+  article trailing separator cleanup.
+- Selected LeetCode problem extraction, including description-content selection,
+  LeetCode title suffix cleanup, relative URL normalization, and problem
+  statement/code/list rendering.
+- Selected Mastodon and Reddit conversation extraction, including automatic
+  ~old.reddit.com~ retrieval for modern comments URLs, main post metadata,
+  thread continuation text, nested comments, scores/dates, Mastodon
+  multi-image media galleries, Reddit media galleries, and Mastodon link cards.
+- Selected arXiv/LaTeXML rendering cleanup for equation tables, cross-reference
+  labels, multi-citations, and author footnote marks.
+- Selected Daring Fireball metadata and article cleanup, including sidebar
+  author extraction, dateline parsing, footnotes, and previous/next navigation
+  removal.
+- Selected Arm Newsroom cleanup, including single-post author extraction and
+  removal of breadcrumb, copy, contact, social-feed, and legal-disclaimer chrome.
+- Selected Elementor archive-page extraction, including archive entry-point
+  selection, heading-widget preservation, table-widget preservation, and Jet
+  search/map/listing chrome removal.
+- Selected Wikidot/SCP cleanup, including page-title de-duplication,
+  leading SCP image preservation, and Wikidot footnote conversion.
+- Selected Obsidian site handling, including H1-adjacent author/date bylines,
+  Obsidian Publish title suffix cleanup, and CJK Publish content preserved when
+  CSS custom properties contain hidden-display-like values.
+- HTML-to-Org conversion for headings, paragraphs, links, block links around
+  article-card headings, images, figures and
+  captions, lists, horizontal rules, quotes, code blocks with language hints,
+  inline ~code~/~samp~ elements, substantive SVG as HTML export blocks, and
+  simple tables, with selected heading permalink anchors stripped before rendering.
+- Selected custom element standardization, including ~span[data-as="p"]~
+  rendered as paragraph blocks and swiper carousel content preserved through
+  child image extraction.
+- Conservative table handling: simple data tables are preserved as Org tables,
+  inline links/emphasis/code and short ~pre~ snippets inside cells are preserved,
+  table structural header rows are kept, empty visual tables are skipped,
+  link-dense data tables are retained, and selected single-column,
+  single-cell prose, dominant-column legacy, or nested-table layout tables are
+  expanded back into normal Org headings, paragraphs, lists, and inner data
+  tables.
+- Code block cleanup for selected syntax highlighter output, including inline
+  line-number spans, Pygments line numbers, React Syntax Highlighter line
+  numbers, Chroma/Rouge/Hexo table-based line-number layouts, Chroma line-span
+  blocks, rehype-pretty-code ~data-line~ spans, flex-row gutter
+  layouts, ChatGPT CodeMirror read-only blocks and shared-conversation
+  content with thought/source UI stripped, Expressive Code row layouts,
+  Mintlify/Shiki documentation code blocks, Stripe-style code tab selectors and
+  anchored heading wrappers, Writerside-style ~div.code-block[data-lang]~ blocks, Lean
+  ~code.hl.block~ blocks, selected Lean Verso command/output grouping with
+  hover metadata cleanup and preserved intentional section gaps, shared HTML
+  indentation cleanup, and copy/header UI injected into or next to code blocks.
+- Org quote-block rendering for selected callout/admonition formats, including
+  Obsidian Publish callouts, GitHub markdown alerts, Hugo/Docsy admonitions,
+  Bootstrap alerts, and generic ~aside.callout~ blocks. These sources are
+  standardized before hidden-element and selector cleanup, so collapsed
+  Obsidian callout content is expanded/preserved and dismissible Bootstrap
+  alerts keep their semantic alert type.
+- Org math rendering for selected defuddle math sources: raw LaTeX delimiters
+  on pages that use math libraries, MathJax ~script[type^="math/"]~ elements,
+  KaTeX annotations, ~data-math~/~data-latex~/~data-tex~ attributes, MathML
+  ~alttext~, Temml/Hurmet ~data-entry~ attributes, LaTeX image-service URLs,
+  WordPress.com ~latex.php~ images, standalone equation images with LaTeX alt text,
+  common MediaWiki math wrappers, and a first structured MathML-to-LaTeX fallback for MathJax
+  SVG/tagged-equation/full MathJax output, plus selected MathJax CHTML render
+  trees without assistive MathML. Partial-noise cleanup preserves MathJax
+  containers whose ~CtxtMenu~ class names otherwise look like navigation noise.
+- Emacs dynamic module calls returning either JSON or Org.
+- Configurable URL async extraction through a ~useAsync~-style option exposed as
+  ~org-defuddle-use-async~ and per-call ~:use-async~ for the Elisp URL workflow.
+- Configurable image inclusion through the Rust core, dynamic module, and Elisp
+  wrappers, including upstream-compatible per-call ~:remove-images~ spelling.
+- Configurable main-content selection with a CSS selector, matching defuddle's
+  ~contentSelector~ option with automatic fallback when the selector does not
+  match.
+- Configurable site-specific replies/comments with an ~includeReplies~-style
+  option across the Rust core, dynamic module, and Elisp wrappers.
+- Configurable hidden-element removal through a ~removeHiddenElements~-style
+  option across the Rust core, dynamic module, and Elisp wrappers.
+- Configurable exact and partial selector cleanup through
+  ~removeExactSelectors~- and ~removePartialSelectors~-style options across the
+  Rust core, dynamic module, and Elisp wrappers. Debug/profile records from this
+  pass use the upstream ~removeBySelector~ step name.
+- Upstream defuddle fixture smoke tests that validate selected expected
+  metadata and content across JavaScript links, code blocks, syntax highlighter
+  cleanup including selected table-based codeblock layouts, hidden nodes with
+  substantial aria-hidden content preservation, content-bearing hidden dialog
+  preservation with signature footer retention, visibility-hidden content
+  removal with parent heading preservation, lazy images, menu-id content
+  preservation, span-as-paragraph standardization, srcset/noscript/base64 image
+  normalization, lightbox image deduplication, embedded video/iframe handling,
+  empty video shell removal, single-column, single-cell prose, dominant-column legacy, and nested layout table expansion,
+  data-table and link-dense table preservation, complex table inline markup preservation, table-cell
+  header row preservation, empty table removal, empty paragraph/BR spacer
+  cleanup, non-breaking-space normalization, whitespace-preserving standalone
+  code elements, figure/caption block rendering,
+  small SVG icon-link removal with substantive SVG export preservation,
+  block children inside span wrappers, H1-sibling
+  byline/date metadata with first-paragraph false-positive protection and
+  above-title header date extraction, short visible date fallback, date-byline author rejection, brand-only OG title fallback, title-suffix site-name fallback including
+  H1/navigation-assisted site inference and selected documentation title suffix
+  cleanup, email-style header block preservation, placeholder metadata fallback,
+  author URL suffix cleanup, front matter author/abstract cleanup, multi-script
+  metadata values, heading wrapper preservation, article-header wrapper preservation, heading
+  permalink cleanup with text-bearing heading anchors preserved, Writerside-style documentation code block rendering, Lean
+  standalone code block rendering, grouped Lean Verso command/output blocks,
+  intentional Lean Verso section gaps, linked text inside inline code, partial
+  selector tokens inside code, ChatGPT CodeMirror code extraction, shared-conversation cleanup,
+  Steam-style BBCode data extraction, Hacker News item/comment/listing extraction, GitHub issue and pull-request extraction, Substack article/note extraction, Substack FootnoteToDOM conversion, X/Twitter article/status/conversation extraction, Mastodon and old Reddit conversation extraction, arXiv/LaTeXML equation and reference cleanup, WordPress.com LaTeX image conversion, Figma blog lede/media/chrome cleanup, LessWrong hidden streamed article extraction and doc-endnote rendering, Daring Fireball dateline and footnote cleanup, Arm Newsroom selector cleanup, Elementor archive cleanup, Wikidot/SCP footnote cleanup, Obsidian blog and Publish CJK extraction,
+  Expressive Code row-preserving extraction, rehype-pretty-code language
+  detection, React Syntax Highlighter toolbar cleanup, Mintlify/Shiki TSX code
+  blocks, Stripe documentation code-tab selector cleanup and anchored section
+  headings, time element metadata cleanup, category-link URL
+  resolution, AP link-enhancement preservation, Farsi zero-width non-joiner preservation, sidebar-toggle shell removal, table-of-contents cleanup, leading
+  breadcrumb removal, non-semantic hero header cleanup, hero class content
+  preservation, Tailwind hidden machine-text cleanup, tag-like title text preservation, PascalCase section-id preservation, pre-content subtitle/dek cleanup,
+  linked/span/paragraph eyebrow category label cleanup, leading HR cleanup, article-card/listing
+  avoidance in main-content selection, block-link article-card rendering, React streaming SSR content materialization, MediaWiki/Wikipedia chrome cleanup and IPA span preservation, Hacker News listing and nested comment extraction, Obsidian Publish hidden-style false-positive avoidance, back-nav removal, appendix heading preservation, standalone social counter removal,
+  read-time/category metadata cleanup, inline comment widget cleanup,
+  related card-grid cleanup, social engagement avatar cluster removal,
+  live-blog status label removal, MediaWiki See also cleanup, internal-link URL
+  resolution, selected Sutta content-shell preservation, explicit ~nocontent~ removal, cookie consent overlay removal, and trailing metadata/share, author-contact/share rails, short author/share widgets, CTA,
+  related/subscribe/newsletter/card-grid/about-author sections and investment/legal disclaimer footers, plus
+  selected footnote formats including numeric/named anchors, paragraph-class
+  footnotes, inline footnote spans, O'Reilly-style noterefs, Texinfo footnotes,
+  dhammatalks-style note blocks, aside ordered lists,
+  footnote-definition/sidenote pairs, Org-mode CSS sidenotes, hidden
+  data-definition aside footnotes, margin-toggle footnote containers, heading-delimited and nested loose paragraph
+  footnotes, child-anchor reference lists, MediaWiki references, external
+  labeled footnote sections, and selected multi-block loose footnotes,
+  callout/admonition formats, and selected math formats including Temml/Hurmet
+  data-entry output, LaTeX formula images, MathJax SVG MathML, tagged
+  equations, Wikipedia MathML, full MathJax MathML samples, KaTeX Centraliser
+  output, and selected MathJax CHTML output without assistive MathML, using
+  ~ORG_DEFUDDLE_DEFUDDLE_DIR~ or the local ~/private/tmp/defuddle-elisp-source~
+  checkout.
+- Project-level agent instructions in ~AGENTS.md~ adapted from
+  ~/repos/coding-guidelines~.
+
+Remaining parity work:
+
+- Port defuddle's full selector lists and the remaining content-pattern
+  removals.
+- Continue expanding low-scoring block-pruning heuristics to match the full
+  upstream scorer.
+- Expand image/media support to the full upstream fixture set, including
+  additional multi-image gallery patterns, richer platform video/embed
+  handling, and remaining site-specific image/figure elements.
+- Expand footnote and callout support to the full upstream fixture set, and
+  expand MathML-to-LaTeX conversion and MathJax CHTML reconstruction, remaining
+  codeblock layouts, broader multi-column layout table handling, richer table
+  rendering, and SVG handling.
+- Expand schema.org text fallback coverage and port site-specific extractors,
+  including richer per-extractor ~variables~ parity for custom fields.
+- Expand the upstream fixture harness until it covers the full defuddle fixture
+  set with meaningful Org-specific expectations.

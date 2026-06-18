@@ -1,0 +1,13 @@
+[workspace]
+members = [
+  "crates/org-defuddle-core",
+  "crates/org-defuddle-cli",
+  "crates/org-defuddle-module",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/luciuschen/org-defuddle"
+rust-version = "1.80"

@@ -14186,6 +14186,7 @@ fn remove_content_patterns(
     remove_eyebrow_label(main, &mut debug_removals);
     remove_leading_breadcrumb(main, &mut debug_removals);
     remove_promotional_banner_links(main, &mut debug_removals);
+    remove_hero_header_blocks(main, &mut debug_removals);
     remove_audio_player_widgets(main, &mut debug_removals);
     remove_timezone_widgets(main, &mut debug_removals);
     remove_category_badges(main, &mut debug_removals);
@@ -14206,6 +14207,8 @@ fn remove_content_patterns(
     remove_trailing_external_link_lists(main, &metadata.url, &mut debug_removals);
     remove_boilerplate_tail(main, &mut debug_removals);
     remove_trailing_heading_sections(main, &mut debug_removals);
+    remove_trailing_related_posts_blocks(main, &mut debug_removals);
+    remove_trailing_thin_sections(main, &mut debug_removals);
     remove_trailing_non_content(main, &mut debug_removals);
 }
 
@@ -14387,6 +14390,55 @@ fn remove_audio_player_widgets(
             detach_content_pattern(debug_removals, "audio player widget", &node);
         }
     }
+}
+
+fn remove_hero_header_blocks(main: &NodeRef, debug_removals: &mut Option<&mut Vec<DebugRemoval>>) {
+    let Ok(matches) = main.select("time") else {
+        return;
+    };
+    let times = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+
+    for time in times {
+        if time.parent().is_none() || !is_before_substantive_content_start(main, &time) {
+            continue;
+        }
+        let mut best = None;
+        let mut current = time.parent();
+        while let Some(candidate) = current {
+            if candidate == *main {
+                break;
+            }
+            if is_hero_header_block_candidate(&candidate) {
+                best = Some(candidate.clone());
+            } else if count_words(&candidate.text_contents()) > 80 {
+                break;
+            }
+            current = candidate.parent();
+        }
+
+        if let Some(block) = best {
+            detach_content_pattern(debug_removals, "hero header block", &block);
+            return;
+        }
+    }
+}
+
+fn is_hero_header_block_candidate(node: &NodeRef) -> bool {
+    if count_selector(node, "h1, h2") == 0 || count_selector(node, "time") == 0 {
+        return false;
+    }
+    if count_selector(node, "pre, code, table, blockquote") > 0 || has_math_content(node) {
+        return false;
+    }
+    let total_words = count_words(&node.text_contents());
+    if total_words == 0 || total_words > 80 {
+        return false;
+    }
+    let metadata_words = selector_text_words(node, "h1, h2, h3, time, [aria-label]");
+    let prose_words = total_words.saturating_sub(metadata_words);
+    prose_words < 30
 }
 
 fn audio_player_widget_container(media: &NodeRef, main: &NodeRef) -> NodeRef {
@@ -14635,6 +14687,169 @@ fn trailing_heading_section_nodes(heading: &NodeRef) -> Option<Vec<NodeRef>> {
     }
 
     (following_elements > 0 && following_words <= 160).then_some(nodes)
+}
+
+fn remove_trailing_related_posts_blocks(
+    main: &NodeRef,
+    debug_removals: &mut Option<&mut Vec<DebugRemoval>>,
+) {
+    let Some(last) = last_meaningful_element_child(main) else {
+        return;
+    };
+    if !matches!(
+        tag_name(&last).as_deref(),
+        Some("section" | "div" | "aside")
+    ) {
+        return;
+    }
+    if !is_trailing_related_posts_block(&last) {
+        return;
+    }
+
+    detach_content_pattern(debug_removals, "trailing related posts block", &last);
+}
+
+fn is_trailing_related_posts_block(node: &NodeRef) -> bool {
+    let mut paragraphs = Vec::new();
+    for child in element_children(node) {
+        let text = normalize_ws(&child.text_contents());
+        if text.is_empty() || tag_name(&child).as_deref() == Some("br") {
+            continue;
+        }
+        if tag_name(&child).as_deref() != Some("p") {
+            return false;
+        }
+        paragraphs.push(child);
+    }
+    paragraphs.len() >= 2
+        && paragraphs
+            .iter()
+            .all(|paragraph| is_link_dense_related_paragraph(paragraph))
+}
+
+fn is_link_dense_related_paragraph(paragraph: &NodeRef) -> bool {
+    let text = normalize_ws(&paragraph.text_contents());
+    if text.is_empty() || count_selector(paragraph, "a[href]") == 0 {
+        return false;
+    }
+    let link_text_len = selector_text_len(paragraph, "a[href]");
+    if link_text_len * 10 <= text.chars().count().max(1) * 6 {
+        return false;
+    }
+    let mut non_link_text = text.clone();
+    if let Ok(links) = paragraph.select("a[href]") {
+        for link in links {
+            let link_text = normalize_ws(&link.as_node().text_contents());
+            if !link_text.is_empty() {
+                non_link_text = non_link_text.replace(&link_text, " ");
+            }
+        }
+    }
+    !non_link_text.contains(['.', '!', '?'])
+}
+
+fn remove_trailing_thin_sections(
+    main: &NodeRef,
+    debug_removals: &mut Option<&mut Vec<DebugRemoval>>,
+) {
+    let total_words = count_words(&main.text_contents());
+    if total_words <= 300 {
+        return;
+    }
+
+    let mut trailing = Vec::new();
+    let mut trailing_words = 0usize;
+    let mut current = last_element_child(main);
+    while let Some(child) = current {
+        if element_attr(&child, "id")
+            .as_deref()
+            .is_some_and(|id| id.eq_ignore_ascii_case("footnotes"))
+        {
+            current = previous_element_sibling(&child);
+            continue;
+        }
+        if tag_name(&child).as_deref() == Some("hr") {
+            trailing.push(child);
+            break;
+        }
+        let words = prose_words_excluding_svg(&child);
+        if words > 25 {
+            break;
+        }
+        trailing_words += words;
+        trailing.push(child.clone());
+        current = previous_element_sibling(&child);
+    }
+
+    if trailing.is_empty() || trailing_words * 100 >= total_words * 15 {
+        return;
+    }
+    if !trailing
+        .iter()
+        .any(|node| heading_level_in_subtree(node).is_some())
+    {
+        return;
+    }
+    if trailing.iter().any(has_article_content_element) {
+        return;
+    }
+    let prose_paragraphs = trailing
+        .iter()
+        .map(|node| {
+            node.select("p")
+                .ok()
+                .into_iter()
+                .flatten()
+                .filter(|paragraph| count_words(&paragraph.as_node().text_contents()) > 5)
+                .count()
+        })
+        .sum::<usize>();
+    if prose_paragraphs >= 2 {
+        return;
+    }
+
+    for node in trailing {
+        if node.parent().is_some() {
+            detach_content_pattern(debug_removals, "trailing thin section", &node);
+        }
+    }
+}
+
+fn last_element_child(node: &NodeRef) -> Option<NodeRef> {
+    element_children(node).into_iter().last()
+}
+
+fn last_meaningful_element_child(node: &NodeRef) -> Option<NodeRef> {
+    let mut current = last_element_child(node);
+    while let Some(child) = current {
+        if matches!(tag_name(&child).as_deref(), Some("hr" | "br"))
+            || is_ignorable_tail_node(&child)
+        {
+            current = previous_element_sibling(&child);
+        } else {
+            return Some(child);
+        }
+    }
+    None
+}
+
+fn prose_words_excluding_svg(node: &NodeRef) -> usize {
+    let total = count_words(&node.text_contents());
+    let svg_words = node
+        .select("svg")
+        .ok()
+        .into_iter()
+        .flatten()
+        .map(|svg| count_words(&svg.as_node().text_contents()))
+        .sum::<usize>();
+    total.saturating_sub(svg_words)
+}
+
+fn has_article_content_element(node: &NodeRef) -> bool {
+    count_selector(
+        node,
+        "math, [data-mathml], .katex, .katex-mathml, .katex-display, .MathJax, .MathJax_Display, .MathJax_SVG, mjx-container, pre, code, table, img, picture, video, blockquote, figure",
+    ) > 0 || has_math_content(node)
 }
 
 fn remove_pre_content_metadata(
@@ -15862,6 +16077,9 @@ fn is_trailing_non_content_node(node: &NodeRef) -> bool {
     if is_trailing_social_avatar_cluster(node) {
         return true;
     }
+    if is_trailing_tag_link_block_node(node) {
+        return true;
+    }
     is_tail_link_cluster(node)
 }
 
@@ -15947,17 +16165,22 @@ fn is_trailing_author_contact_node(node: &NodeRef) -> bool {
         || attrs.contains("author-contact")
         || attrs.contains("byline-contact")
         || attrs.contains("contact-block");
-    if !has_contact_signal {
-        return false;
-    }
     let text = normalize_ws(&node.text_contents());
     let text_lc = text.to_ascii_lowercase();
     let words = count_words(&text);
-    words > 0
-        && words <= 40
-        && (text_lc.contains("contact")
+    if !(2..=40).contains(&words) {
+        return false;
+    }
+    if has_contact_signal {
+        return text_lc.contains("contact")
             || text_lc.contains("written by")
-            || count_selector(node, "a[href^=\"mailto:\"]") > 0)
+            || count_selector(node, "a[href^=\"mailto:\"]") > 0;
+    }
+
+    (has_author_contact_label(node)
+        || text_lc.starts_with("contact")
+        || text_lc.starts_with("written by"))
+        && has_contact_info(node, &text)
 }
 
 fn is_trailing_author_share_node(node: &NodeRef) -> bool {
@@ -16088,6 +16311,61 @@ fn is_trailing_social_avatar_cluster(node: &NodeRef) -> bool {
     }
 
     has_profile_link(node) && images.iter().all(is_avatar_or_small_image)
+}
+
+fn is_trailing_tag_link_block_node(node: &NodeRef) -> bool {
+    if tag_name(node).as_deref() != Some("div")
+        || has_article_content_element(node)
+        || count_selector(node, "pre, code, table, blockquote") > 0
+    {
+        return false;
+    }
+    let text = normalize_ws(&node.text_contents());
+    let words = count_words(&text);
+    if words == 0 || words > 10 || text.contains(['.', '!', '?']) {
+        return false;
+    }
+    let links = count_selector(node, "a[href]");
+    if links == 0 {
+        return false;
+    }
+    let link_text_len = selector_text_len(node, "a[href]");
+    link_text_len * 10 >= text.chars().count().max(1) * 8
+}
+
+fn has_author_contact_label(node: &NodeRef) -> bool {
+    let Ok(matches) = node.select("div, span, p, dt, dd, li") else {
+        return false;
+    };
+    matches.into_iter().any(|matched| {
+        let text = normalize_ws(&matched.as_node().text_contents());
+        is_author_contact_label_text(&text)
+    })
+}
+
+fn is_author_contact_label_text(text: &str) -> bool {
+    matches!(
+        text.to_ascii_lowercase().as_str(),
+        "written by"
+            | "author"
+            | "authors"
+            | "contact"
+            | "contacts"
+            | "reporter"
+            | "reporters"
+            | "correspondent"
+            | "correspondents"
+    )
+}
+
+fn has_contact_info(node: &NodeRef, text: &str) -> bool {
+    static EMAIL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\w.-]+@[\w.-]+\.\w+").unwrap());
+    static PHONE_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}").unwrap());
+    EMAIL_RE.is_match(text)
+        || text.contains('@')
+        || PHONE_RE.is_match(text)
+        || count_selector(node, "a[href^=\"mailto:\"]") > 0
 }
 
 fn is_avatar_or_small_image(node: &NodeRef) -> bool {
@@ -30410,6 +30688,160 @@ line break text.">
             .org
             .contains("This first article paragraph is short but still real content."));
         assert!(!output.org.contains("-----"));
+    }
+
+    #[test]
+    fn content_patterns_remove_hero_header_wrapper() {
+        let html = r#"
+        <!doctype html>
+        <html>
+          <head>
+            <title>Hero Header Wrapper</title>
+            <meta name="author" content="Jane Example">
+          </head>
+          <body>
+            <article class="post-content">
+              <div class="hero-shell">
+                <h1>Hero Header Wrapper</h1>
+                <time datetime="2026-06-01">June 1, 2026</time>
+                <p>By Jane Example</p>
+                <img src="/hero.jpg" alt="Hero image">
+              </div>
+              <p>The article body starts after the hero header and contains enough words to anchor the extracted content.</p>
+              <p>The second paragraph confirms the real article body survives after removing the wrapper.</p>
+            </article>
+          </body>
+        </html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/hero-wrapper".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("article body starts after the hero"));
+        assert!(!output.org.contains("Hero image"));
+        assert!(!output.html.contains("hero.jpg"));
+    }
+
+    #[test]
+    fn content_patterns_remove_structural_related_posts_tail() {
+        let html = r#"
+        <!doctype html>
+        <html>
+          <head><title>Structural Related Posts</title></head>
+          <body>
+            <article class="post-content">
+              <h1>Structural Related Posts</h1>
+              <p>The article body has enough words to remain the selected content before the related links tail.</p>
+              <p>A second paragraph keeps extraction stable and confirms the tail is not part of the article.</p>
+              <section>
+                <p><a href="/one">Related extraction story</a></p>
+                <p><a href="/two">Another related article</a></p>
+              </section>
+            </article>
+          </body>
+        </html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/related-tail".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("article body has enough words"));
+        assert!(!output.org.contains("Related extraction story"));
+        assert!(!output.org.contains("Another related article"));
+    }
+
+    #[test]
+    fn content_patterns_remove_trailing_thin_section() {
+        let long_body = "substantive ".repeat(320);
+        let html = format!(
+            r#"
+        <!doctype html>
+        <html>
+          <head><title>Thin Tail</title></head>
+          <body>
+            <article class="post-content">
+              <h1>Thin Tail</h1>
+              <p>{long_body}</p>
+              <section>
+                <h2>Next steps</h2>
+                <p>Short prompt</p>
+              </section>
+            </article>
+          </body>
+        </html>
+        "#
+        );
+
+        let output = parse_html_to_org(
+            &html,
+            DefuddleOptions {
+                url: Some("https://example.com/thin-tail".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("substantive substantive"));
+        assert!(!output.org.contains("Next steps"));
+        assert!(!output.org.contains("Short prompt"));
+    }
+
+    #[test]
+    fn content_patterns_remove_trailing_tag_links_and_contact_blocks() {
+        let html = r#"
+        <!doctype html>
+        <html>
+          <head><title>Tag And Contact Tail</title></head>
+          <body>
+            <article class="post-content">
+              <h1>Tag And Contact Tail</h1>
+              <p>The article body has enough words to remain selected before tag and contact metadata blocks.</p>
+              <p>A second paragraph keeps extraction stable while the trailing metadata blocks are removed.</p>
+              <section>
+                <div>Contact</div>
+                <p>Jane Reporter jane@example.com</p>
+              </section>
+              <div><a href="/tags/features">Features</a> <a href="/tags/ai">AI</a></div>
+            </article>
+          </body>
+        </html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/tag-contact-tail".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("article body has enough words"));
+        assert!(!output.org.contains("Jane Reporter"));
+        assert!(!output.org.contains("jane@example.com"));
+        assert!(!output.org.contains("Features"));
+        assert!(!output.html.contains("/tags/features"));
+        assert!(!output.html.contains("/tags/ai"));
     }
 
     #[test]

@@ -730,31 +730,67 @@ pub fn parse_html_to_org(
         return Ok(result);
     }
 
-    if result.word_count == 0 {
+    if result.word_count < 200 && options.remove_partial_selectors {
         let mut retry_options = options.clone();
         retry_options.remove_partial_selectors = false;
         let retry = parse_html_to_org_once(html, retry_options)?;
-        if retry.word_count > 0 {
+        if retry.word_count > result.word_count * 2
+            && !retry_introduces_cleanup_regression(&result, &retry)
+        {
             result = retry;
         }
     }
 
-    if result.word_count == 0 {
+    if result.word_count < 50 && options.remove_hidden_elements {
         let mut retry_options = options.clone();
         retry_options.remove_hidden_elements = false;
         let retry = parse_html_to_org_once(html, retry_options)?;
-        if retry.word_count > 0 {
+        if retry.word_count > result.word_count * 2
+            && !retry_introduces_cleanup_regression(&result, &retry)
+        {
+            result = retry;
+        }
+
+        if let Some(hidden_selector) = find_largest_hidden_content_selector(html) {
+            let mut retry_options = options.clone();
+            retry_options.remove_hidden_elements = false;
+            retry_options.remove_partial_selectors = false;
+            retry_options.content_selector = Some(hidden_selector);
+            let retry = parse_html_to_org_once(html, retry_options)?;
+            if retry.word_count > result.word_count
+                || (retry.word_count > std::cmp::max(20, result.word_count * 7 / 10)
+                    && retry.html.len() < result.html.len())
+            {
+                result = retry;
+            }
+        }
+    }
+
+    if result.word_count < 50
+        && (options.remove_low_scoring
+            || options.remove_partial_selectors
+            || options.remove_content_patterns)
+    {
+        let mut retry_options = options.clone();
+        retry_options.remove_low_scoring = false;
+        retry_options.remove_partial_selectors = false;
+        let retry = parse_html_to_org_once(html, retry_options)?;
+        if retry.word_count > result.word_count
+            && !retry_introduces_cleanup_regression(&result, &retry)
+        {
             result = retry;
         }
     }
 
-    if result.word_count == 0 {
+    if result.word_count < 50 && options.remove_content_patterns {
         let mut retry_options = options.clone();
         retry_options.remove_low_scoring = false;
         retry_options.remove_partial_selectors = false;
         retry_options.remove_content_patterns = false;
         let retry = parse_html_to_org_once(html, retry_options)?;
-        if retry.word_count > result.word_count {
+        if retry.word_count > result.word_count
+            && !retry_introduces_cleanup_regression(&result, &retry)
+        {
             result = retry;
         }
     }
@@ -763,6 +799,70 @@ pub fn parse_html_to_org(
     attach_frontmatter(&mut result, options.url.as_deref(), options.frontmatter);
     attach_parse_diagnostics(&mut result, &options, parse_start);
     Ok(result)
+}
+
+fn retry_introduces_cleanup_regression(current: &DefuddleOutput, retry: &DefuddleOutput) -> bool {
+    const CLEANUP_REGRESSION_MARKERS: &[&str] = &[
+        "Links to this page",
+        "Interactive graph",
+        "Powered by Obsidian Publish",
+        "Top comment by",
+        "View all comments",
+        "See also",
+        "See how our platform can help",
+        "Tips, tutorials, and best practices",
+        "March 13, 2026",
+    ];
+    CLEANUP_REGRESSION_MARKERS
+        .iter()
+        .any(|marker| !current.org.contains(marker) && retry.org.contains(marker))
+}
+
+fn find_largest_hidden_content_selector(html: &str) -> Option<String> {
+    let document = kuchiki::parse_html().one(html);
+    let matches = document.select("*").ok()?;
+    let mut best: Option<(NodeRef, usize)> = None;
+
+    for matched in matches {
+        let node = matched.as_node();
+        if !is_largest_hidden_content_candidate(node) {
+            continue;
+        }
+        let words = count_words(&node.text_contents());
+        if words
+            > best
+                .as_ref()
+                .map(|(_, best_words)| *best_words)
+                .unwrap_or(0)
+        {
+            best = Some((node.clone(), words));
+        }
+    }
+
+    let (node, words) = best?;
+    (words >= 30).then(|| element_selector_path(&node))
+}
+
+fn is_largest_hidden_content_candidate(node: &NodeRef) -> bool {
+    if is_html_or_body_node(node) {
+        return false;
+    }
+    let Some(element) = node.as_element() else {
+        return false;
+    };
+    let attrs = element.attributes.borrow();
+    let class = attrs.get("class").unwrap_or_default();
+    if class.to_ascii_lowercase().contains("math") {
+        return false;
+    }
+
+    attrs.contains("hidden")
+        || attrs
+            .get("aria-hidden")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+        || class
+            .split_ascii_whitespace()
+            .any(|token| matches!(token, "hidden" | "invisible"))
 }
 
 fn parse_html_to_org_once(
@@ -30793,6 +30893,77 @@ line break text.">
     }
 
     #[test]
+    fn low_content_retry_recovers_short_partial_selector_false_positive() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head><title>Short Retry Partial</title></head>
+          <body>
+            <article>
+              <h1>Short Retry Partial</h1>
+              <p>Brief lead paragraph remains visible before a real section with a misleading class.</p>
+              <section class="related-widget">
+                <p>Recovered expanded short article marker with enough article words to more than double the initial extraction after partial selector cleanup.</p>
+                <p>The continuation explains implementation details, examples, caveats, and conclusions that belong to the main article body.</p>
+              </section>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/retry-short-partial".to_string()),
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output
+            .org
+            .contains("Recovered expanded short article marker"));
+        assert!(output.word_count > 30, "{}", output.org);
+    }
+
+    #[test]
+    fn low_content_retry_preserves_short_articles_without_large_retry_gain() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head><title>Short Article</title></head>
+          <body>
+            <article>
+              <h1>Short Article</h1>
+              <p>This short article should stay focused after cleanup even when a small related widget would add only a little noise.</p>
+              <aside class="related-widget">Related extra words should remain excluded.</aside>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/short-article".to_string()),
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output
+            .org
+            .contains("This short article should stay focused"));
+        assert!(
+            !output
+                .org
+                .contains("Related extra words should remain excluded"),
+            "{}",
+            output.org
+        );
+    }
+
+    #[test]
     fn low_content_retry_recovers_hidden_article_content() {
         let html = r##"
         <!doctype html>
@@ -30817,6 +30988,43 @@ line break text.">
         .unwrap();
 
         assert!(output.org.contains("Recovered hidden article marker."));
+    }
+
+    #[test]
+    fn low_content_retry_targets_largest_hidden_subtree_for_focused_content() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head><title>Hidden Focus</title></head>
+          <body>
+            <main>
+              <p>Visible status overlay counter shows frames network state latency version panel.</p>
+            </main>
+            <div id="article-cache" hidden>
+              <h1>Hidden Focus</h1>
+              <p>Focused hidden selector marker recovers the real article from a hidden runtime cache when ordinary main-content scoring stays on visible shell leftovers.</p>
+              <p>The recovered article has enough prose to be considered substantive, while the visible shell text should not survive the direct hidden selector retry.</p>
+            </div>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/retry-hidden-selector".to_string()),
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("Focused hidden selector marker"));
+        assert!(
+            !output.org.contains("Visible status overlay counter"),
+            "{}",
+            output.org
+        );
+        assert!(output.word_count > 30, "{}", output.org);
     }
 
     #[test]

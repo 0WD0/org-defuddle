@@ -2688,7 +2688,7 @@ fn selected_upstream_fixtures_smoke() {
 }
 
 #[test]
-fn selected_upstream_fixtures_exact_org_snapshots() {
+fn all_upstream_fixtures_exact_org_snapshots() {
     let Some(defuddle_dir) = upstream_dir() else {
         eprintln!(
             "skipping upstream fixture exact Org snapshots; set ORG_DEFUDDLE_DEFUDDLE_DIR to a defuddle checkout"
@@ -2696,124 +2696,65 @@ fn selected_upstream_fixtures_exact_org_snapshots() {
         return;
     };
 
-    let cases = [
-        (
-            "elements--embedded-videos",
-            r#"* Embedded videos test
-:PROPERTIES:
-:WORD_COUNT: 20
-:END:
+    let fixtures = upstream_fixture_names(&defuddle_dir);
+    let expected_dir = expected_org_dir();
+    let update = std::env::var_os("ORG_DEFUDDLE_UPDATE_EXPECTED_ORG").is_some();
 
-A YouTube video:
-
-[[https://www.youtube.com/watch?v=b_PXuEPxN50]]
-
-A YouTube nocookie video:
-
-[[https://www.youtube.com/watch?v=b_PXuEPxN50]]
-
-A tweet:
-
-[[https://x.com/i/status/1675626836821409792]]
-
-An X.com embed:
-
-[[https://x.com/kepano/status/1675626836821409792]]
-
-A Vimeo video should stay as iframe:
-
-#+begin_export html
-<iframe src="https://player.vimeo.com/video/45725193?h=a290f71a57" width="100%" height="100%" frameborder="0" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen=""></iframe>
-#+end_export
-"#,
-        ),
-        (
-            "elements--data-table",
-            r#"* Data Table Test
-:PROPERTIES:
-:WORD_COUNT: 53
-:END:
-
-** Programming Language Comparison
-
-Here is a comparison of popular programming languages:
-
-| Language | Year | Typing | Primary Use |
-| Python | 1991 | Dynamic | General purpose, data science |
-| Rust | 2015 | Static | Systems programming |
-| TypeScript | 2012 | Static | Web development |
-| Go | 2009 | Static | Cloud infrastructure |
-
-Each language has its strengths and trade-offs.
-
-** Without thead
-
-| Name | Score |
-| Alice | 95 |
-| Bob | 87 |
-"#,
-        ),
-        (
-            "elements--javascript-links",
-            r#"* JavaScript Links Test
-:PROPERTIES:
-:WORD_COUNT: 55
-:END:
-
-This has a simple js link in a sentence.
-
-Here is a link with onclick and a link with alert that should both be unwrapped.
-
-A *bold js link* should keep its inner HTML.
-
-Normal links like [[https://example.com][Example]] and [[https://example.com/page][another page]] should stay as links.
-
-Mixed: [[https://example.com][real link]], then js link, then [[https://example.com/other][another real link]].
-"#,
-        ),
-        (
-            "math--raw-latex",
-            r#"* Raw LaTeX Math Delimiters
-:PROPERTIES:
-:LANGUAGE: en
-:WORD_COUNT: 123
-:END:
-
-The attention mechanism computes $h_{i}^{\ell+1} = \text{Attention} \left( Q^{\ell} h_{i}^{\ell}, K^{\ell} h_{j}^{\ell}, V^{\ell} h_{j}^{\ell} \right)$ for each node in the graph.
-
-Here $f(x) = \sum_{i=0}^{n} \frac{a_i}{i!} x^i$ is the Taylor expansion and $g(x) = \int_0^1 e^{-t^2} dt$ is the Gaussian integral.
-
-The loss function is defined as:
-
-$$
-\mathcal{L}(\theta) = -\frac{1}{N} \sum_{i=1}^{N} \log p_\theta(x_i)
-$$
-
-This costs $100 per unit, which is not math.
-
-Let $x$ be a variable and $n$ be an integer.
-
-The backslash delimiters work too: $E = mc^2$ is inline and
-
-$$
-F = ma
-$$
-
-#+begin_src
-This $\alpha$ should not be touched inside pre tags.
-#+end_src
-"#,
-        ),
-    ];
-
-    for (fixture, expected_org) in cases {
-        let output = parse_upstream_fixture(&defuddle_dir, fixture);
+    assert!(!fixtures.is_empty(), "no upstream HTML fixtures found");
+    if update {
+        std::fs::create_dir_all(&expected_dir)
+            .unwrap_or_else(|err| panic!("failed to create {}: {err}", expected_dir.display()));
+    } else {
+        let expected = expected_org_snapshot_names(&expected_dir);
         assert_eq!(
-            output.org.trim_end(),
-            expected_org.trim_end(),
+            expected, fixtures,
+            "Org snapshot set does not match the upstream fixture set; regenerate with ORG_DEFUDDLE_UPDATE_EXPECTED_ORG=1"
+        );
+    }
+
+    for fixture in fixtures {
+        let output = parse_upstream_fixture(&defuddle_dir, &fixture);
+        let expected_path = expected_dir.join(format!("{fixture}.org"));
+        if update {
+            std::fs::write(&expected_path, &output.org)
+                .unwrap_or_else(|err| panic!("failed to write {}: {err}", expected_path.display()));
+            continue;
+        }
+
+        let expected_org = std::fs::read_to_string(&expected_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", expected_path.display()));
+        assert_eq!(
+            output.org, expected_org,
             "fixture {fixture} exact Org mismatch"
         );
     }
+}
+
+fn upstream_fixture_names(defuddle_dir: &std::path::Path) -> Vec<String> {
+    snapshot_names(&defuddle_dir.join("tests").join("fixtures"), "html")
+}
+
+fn expected_org_snapshot_names(expected_dir: &std::path::Path) -> Vec<String> {
+    snapshot_names(expected_dir, "org")
+}
+
+fn snapshot_names(directory: &std::path::Path, extension: &str) -> Vec<String> {
+    let mut names = std::fs::read_dir(directory)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", directory.display()))
+        .map(|entry| entry.unwrap_or_else(|err| panic!("failed to read directory entry: {err}")))
+        .filter_map(|entry| {
+            let path = entry.path();
+            (path.extension().and_then(|value| value.to_str()) == Some(extension))
+                .then(|| path.file_stem()?.to_str().map(str::to_string))
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+fn expected_org_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/expected-org")
 }
 
 fn parse_upstream_fixture(

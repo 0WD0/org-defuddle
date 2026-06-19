@@ -1,0 +1,19 @@
+* My Homepage
+:PROPERTIES:
+:LANGUAGE: en
+:WORD_COUNT: 30
+:END:
+
+** Welcome
+
+Hello, welcome to my website!
+
+** Projects
+
+- [[https://example.com/project-one][Project One]] - a cool project
+- [[https://example.com/project-two][Project Two]] - another project
+- [[/local-page.html][Local Page]]
+
+** Contact
+
+Find me on [[https://example.com/social][social media]] or email *hello at example.com*.

@@ -1,0 +1,21 @@
+* ChatGPT
+:PROPERTIES:
+:URL: https://chatgpt.com/share/example-12345
+:DOMAIN: chatgpt.com
+:WORD_COUNT: 42
+:END:
+
+Here is a generator-based implementation:
+
+#+begin_src python
+def fibonacci_generator(n):
+    a, b = 0, 1
+    for _ in range(n):
+        yield a
+        a, b = b, a + b
+
+for num in fibonacci_generator(10):
+    print(num)
+#+end_src
+
+This uses Python's ~yield~ keyword to lazily produce each number.

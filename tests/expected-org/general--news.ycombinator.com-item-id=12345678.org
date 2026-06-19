@@ -1,0 +1,17 @@
+* Comment by testuser: This is the main comment text that should be extra...
+:PROPERTIES:
+:URL: https://news.ycombinator.com/item?id=12345678
+:AUTHOR: testuser
+:PUBLISHED: 2025-06-15
+:SITE: Hacker News
+:DOMAIN: news.ycombinator.com
+:WORD_COUNT: 35
+:END:
+
+*testuser* · 2025-06-15
+
+This is the main comment text that should be extracted by the Hacker News extractor.
+
+It has multiple paragraphs to test proper content extraction.
+
+And a link: [[https://example.com][https://example.com]]

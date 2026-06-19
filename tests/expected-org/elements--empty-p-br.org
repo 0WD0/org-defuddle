@@ -1,0 +1,10 @@
+* Empty paragraph br test
+:PROPERTIES:
+:WORD_COUNT: 9
+:END:
+
+First section content.
+
+Second section content.
+
+Third section content.

@@ -1,0 +1,18 @@
+* Chroma Code Block
+:PROPERTIES:
+:WORD_COUNT: 23
+:END:
+
+#+begin_src go
+package main
+
+type Person struct {
+    Name string
+    Age  int
+}
+
+func (p *Person) Sleep() int {
+    p.Age += 1
+    return p.Age
+}
+#+end_src

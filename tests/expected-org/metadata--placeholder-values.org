@@ -1,0 +1,14 @@
+* Placeholder Fallbacks
+:PROPERTIES:
+:URL: https://blog.example.com/posts/fallbacks
+:PUBLISHED: 2026-03-15T10:00:00+00:00
+:SITE: Example Blog
+:DOMAIN: blog.example.com
+:DESCRIPTION: A post demonstrating that defuddle falls back past placeholder metadata values.
+:LANGUAGE: en
+:WORD_COUNT: 65
+:END:
+
+Some CMSes leave unresolved template literals like the ones in this page's meta tags. Defuddle should skip over these and fall back to the next valid source.
+
+In this fixture, og:title, og:site_name, og:description, and article:published_time are all template placeholders. The name meta description and the name author are both literal ". .". The real values come from the schema and twitter:description tags.

@@ -1,0 +1,29 @@
+* Longest Special Sequence
+:PROPERTIES:
+:URL: https://leetcode.com/problems/longest-special-sequence/description
+:SITE: LeetCode
+:DOMAIN: leetcode.com
+:WORD_COUNT: 49
+:END:
+
+Given a string ~s~, return /the longest/ /special/ /subsequence/ in ~s~.
+
+*Example 1:*
+
+#+begin_src
+Input: s = "babad"
+Output: "bab"
+Explanation: "aba" is also a valid answer.
+#+end_src
+
+*Example 2:*
+
+#+begin_src
+Input: s = "cbbd"
+Output: "bb"
+#+end_src
+
+*Constraints:*
+
+- ~1 <= s.length <= 1000~
+- ~s~ consists of only digits and English letters.

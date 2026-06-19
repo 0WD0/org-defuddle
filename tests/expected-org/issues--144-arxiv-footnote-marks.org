@@ -1,0 +1,11 @@
+* arXiv Footnote Marks
+:PROPERTIES:
+:LANGUAGE: en
+:WORD_COUNT: 33
+:END:
+
+** Authors
+
+Rafael Rafailov, Archit Sharma, Eric Mitchell
+
+This is the actual article content that follows the author section. The paper presents a novel approach to reinforcement learning from human feedback.

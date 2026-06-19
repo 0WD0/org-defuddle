@@ -1,0 +1,17 @@
+* Test User (@testuser)
+:PROPERTIES:
+:URL: https://substack.com/@testuser/note/c-999999999
+:AUTHOR: Test User
+:SITE: Substack
+:DOMAIN: substack.com
+:DESCRIPTION: This is the main note content on the permalink page.
+:IMAGE: https://example.com/image/main-note.jpg
+:LANGUAGE: en
+:WORD_COUNT: 23
+:END:
+
+This is the main note content on the permalink page.
+
+It has multiple paragraphs with important information.
+
+[[https://example.com/image/main-note.jpg]]

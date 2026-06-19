@@ -1,0 +1,28 @@
+* Bootstrap alerts test
+:PROPERTIES:
+:WORD_COUNT: 36
+:END:
+
+Here is some content before the alerts.
+
+#+begin_quote
+[!info] Important
+This is an informational alert.
+#+end_quote
+
+#+begin_quote
+[!warning] Warning
+This is a warning without a title.
+#+end_quote
+
+#+begin_quote
+[!danger] Danger
+Something went wrong.
+#+end_quote
+
+#+begin_quote
+[!success] Success
+Operation completed successfully.
+#+end_quote
+
+Here is some content after the alerts.

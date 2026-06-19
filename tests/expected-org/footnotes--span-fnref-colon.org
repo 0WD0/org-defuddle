@@ -1,0 +1,16 @@
+* Footnotes with span fnref:id pattern
+:PROPERTIES:
+:WORD_COUNT: 40
+:END:
+
+The first technique relies on precise calibration. [fn:1]
+
+The second technique uses iterative refinement. [fn:2]
+
+Both approaches were validated experimentally. [fn:3]
+
+[fn:1] Calibration details are described in the reference manual.
+
+[fn:2] Iterative refinement was first proposed in 1985.
+
+[fn:3] Experimental validation was performed under controlled conditions.

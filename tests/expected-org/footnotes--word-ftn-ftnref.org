@@ -1,0 +1,12 @@
+* Word HTML footnotes: _ftn/_ftnref pattern
+:PROPERTIES:
+:WORD_COUNT: 35
+:END:
+
+The initiative is aligned with the Action Plan [fn:1], a community-led alternative to traditional publishing.
+
+The consortium includes members from multiple countries [fn:2].
+
+[fn:1] [[https://example.org/action-plan/][https://example.org/action-plan/]]
+
+[fn:2] Country A, Country B, Country C.

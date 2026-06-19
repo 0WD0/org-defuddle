@@ -1,0 +1,60 @@
+* Post by Alice on mastodon.example
+:PROPERTIES:
+:URL: https://mastodon.example/@alice/12345678
+:AUTHOR: Alice
+:PUBLISHED: 2026-04-20
+:SITE: mastodon.example
+:DOMAIN: mastodon.example
+:DESCRIPTION: This is a sample post about something interesting. Check out this link!
+:IMAGE: https://cdn.mastodon.example/media/original/sample-image.png
+:LANGUAGE: en
+:WORD_COUNT: 163
+:END:
+
+This is a sample post about something interesting. Check out this link!
+
+[[https://example.com/interesting][example.com/interesting]]
+
+[[https://cdn.mastodon.example/media/original/sample-image.png][A sample screenshot showing the project]]
+
+-----
+
+Here is some more context about the project
+
+-----
+
+** Comments
+
+#+begin_quote
+*Bob @bob@other.social* · [[https://mastodon.example/@bob@other.social/12345680][2026-04-20]]
+
+[[https://mastodon.example/@alice][@alice]] This is really cool! Great work.
+
+#+end_quote
+
+#+begin_quote
+*Carol @carol@third.social* · [[https://mastodon.example/@carol@third.social/12345681][2026-04-20]]
+
+[[https://mastodon.example/@alice][@alice]] Impressive project. How does it handle edge cases?
+
+#+begin_quote
+*Alice @alice* · [[https://mastodon.example/@alice/12345682][2026-04-20]]
+
+[[https://mastodon.example/@carol@third.social][@carol]] Good question! It uses a fallback mechanism for that.
+
+#+end_quote
+
+#+end_quote
+
+#+begin_quote
+*Dave @dave@mastodon.example* · [[https://mastodon.example/@dave/12345683][2026-04-20]]
+
+[[https://mastodon.example/@alice][@alice]] Related project here
+
+[[https://example.com/related][https://cdn.mastodon.example/cards/related-preview.png]]
+
+[[https://example.com/related][Related Project]]
+
+A similar project with different goals
+
+#+end_quote

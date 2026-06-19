@@ -55,7 +55,47 @@ The dynamic module boundary is deliberately coarse:
 ;; => same plist shape, preserving blocks removed by low-score heuristics
 #+end_src
 
-* Build
+* Installation
+
+Requirements:
+
+- Emacs 27.1 or newer with dynamic module support.
+- macOS, GNU/Linux, or Windows on a supported architecture.
+
+Install the Elisp package from the repository, then run an interactive
+org-defuddle command:
+
+#+begin_src emacs-lisp
+(use-package org-defuddle
+  :vc (:url "https://github.com/LuciusChen/org-defuddle"
+       :rev :newest))
+#+end_src
+
+On first interactive use, org-defuddle offers to download the pinned pre-built
+Rust module from GitHub Releases.  The module is installed under
+~user-emacs-directory/modules/~ and loaded immediately.  Installation can also
+be triggered explicitly:
+
+#+begin_src emacs-lisp
+M-x org-defuddle-download-module
+#+end_src
+
+Release binaries are published for:
+
+- ~aarch64-apple-darwin~ (Apple Silicon)
+- ~x86_64-apple-darwin~ (Intel macOS)
+- ~aarch64-unknown-linux-gnu~
+- ~x86_64-unknown-linux-gnu~
+- ~x86_64-pc-windows-msvc~
+
+The downloaded filename is normalized to ~liborg_defuddle_module~ plus the
+platform's ~module-file-suffix~.  Customize ~org-defuddle-module-file~ to use a
+different persistent location.
+
+* Building From Source
+
+Building requires the Rust toolchain and is only needed for development or an
+unsupported release platform.
 
 #+begin_src sh
 cargo build --release -p org-defuddle-module
@@ -69,6 +109,10 @@ The compiled module is expected at one of:
 - Windows: ~target/release/org_defuddle_module.dll~
 
 The CLI binary is built at ~target/release/org-defuddle~.
+
+Repository-local release builds are detected as a development fallback when no
+downloaded module exists.  Tagged GitHub Releases also contain pre-built CLI
+assets named ~org-defuddle-cli-<target>~.
 
 * Emacs Usage
 
@@ -281,21 +325,32 @@ For local HTML:
 
 * Current Status
 
-This repository has broad Org-extraction parity for the inspected upstream
-defuddle fixture set, but it is not full public API/CLI parity with defuddle.
-The smoke harness covers all 202 upstream fixture HTML files in the inspected
-defuddle snapshot. Every fixture now strictly matches the upstream expected
-~title~, ~author~, ~site~, and ~published~ metadata, alongside fixture-specific
-Org content and cleanup assertions.
+This repository targets Defuddle extraction parity with Org as the canonical
+output. It does not target byte-for-byte Markdown output or the JavaScript
+public API. The fixture harness covers all 202 upstream fixture HTML files in
+the inspected defuddle snapshot. Every fixture strictly matches the upstream
+expected ~title~, ~author~, ~site~, and ~published~ metadata, alongside
+fixture-specific content and cleanup assertions, and every generated Org
+document is compared byte-for-byte with its checked-in snapshot under
+~tests/expected-org/~.
+
+Regenerate the checked-in Org snapshots explicitly after an intentional output
+change:
+
+#+begin_src sh
+ORG_DEFUDDLE_UPDATE_EXPECTED_ORG=1 cargo test -p org-defuddle-core \
+  --test upstream_fixtures all_upstream_fixtures_exact_org_snapshots
+#+end_src
 
 Known remaining gaps:
 
-- Org is the primary output. First-pass Markdown exists only for upstream
+- Org is the canonical output. First-pass Markdown exists only for upstream
   compatibility through ~contentMarkdown~, ~separateMarkdown~,
-  ~:separate-markdown~, and CLI ~--separate-markdown~/~--markdown~, but it is
-  not yet full Turndown parity. The Rust CLI covers URL/local HTML/stdin
-  parsing with JSON, YAML frontmatter, output-file, debug, property-style
-  options, and compatibility Markdown output.
+  ~:separate-markdown~, and CLI ~--separate-markdown~/~--markdown~; full
+  Turndown parity is intentionally outside the Org-parity completion gate. The
+  Rust CLI covers URL/local HTML/stdin parsing with JSON, YAML frontmatter,
+  output-file, debug, property-style options, and compatibility Markdown
+  output.
 - Debug/profile fields are exposed for the Rust core, dynamic module, and Elisp
   JSON path, and report removals from hidden-element, upstream-style
   ~removeBySelector~ selector cleanup,
@@ -409,13 +464,14 @@ Implemented:
   ~rowspan~/~colspan~, nested and single-column layout-table flattening,
   equation-table extraction, figure first-image/caption handling with inline
   caption math, standardized callouts, fenced-code language/backtick handling,
-  empty-link removal, tag-like text escaping, ~wbr~ joins, and document
-  ~base href~ URL resolution, plus MathML/data-latex conversion with MathML
-  preferred over degraded attributes and standalone inline math promoted to
-  block math. It also preserves selected Turndown-kept raw HTML elements such
-  as ~iframe~, ~sup~, ~sub~, ~svg~, ~video~, and ~audio~, renders ~mark~ as
-  ~==highlight==~, and maps YouTube/Twitter/X iframe embeds to upstream-style
-  Markdown image references.
+  empty-link removal, Turndown 7.2.0 base text escaping for emphasis/code and
+  line-leading Markdown constructs, tag-like text escaping, ~wbr~ joins, and
+  document ~base href~ URL resolution, plus MathML/data-latex conversion with
+  MathML preferred over degraded attributes and standalone inline math promoted
+  to block math. It also preserves selected Turndown-kept raw HTML elements
+  such as ~iframe~, ~sup~, ~sub~, ~svg~, ~video~, and ~audio~, renders ~mark~
+  as ~==highlight==~, and maps YouTube/Twitter/X iframe embeds to
+  upstream-style Markdown image references.
 - Upstream-compatible JSON response names at the CLI and dynamic-module
   boundary, including ~content~, ~wordCount~, ~parseTime~, and
   ~contentMarkdown~, while retaining org-defuddle extensions such as ~org~,
@@ -760,9 +816,8 @@ Implemented:
   equations, Wikipedia MathML, full MathJax MathML samples, KaTeX Centraliser
   output, and selected MathJax CHTML output without assistive MathML, using
   ~ORG_DEFUDDLE_DEFUDDLE_DIR~ or the local ~/private/tmp/defuddle-elisp-source~
-  checkout. Exact Org snapshots now lock stable output for selected embedded
-  videos/iframes, data tables, JavaScript-link unwrapping, and raw-LaTeX math
-  fixtures.
+  checkout. Checked-in exact Org snapshots cover all 202 fixtures and the test
+  requires the snapshot filename set to match the upstream fixture set.
 - Project-level agent instructions in ~AGENTS.md~ adapted from
   ~/repos/coding-guidelines~.
 
@@ -785,5 +840,6 @@ Remaining audit and future parity work:
   metadata variables now match the inspected upstream definitions for the
   audited site-specific extractors; custom fields and live browser-only details
   remain intentionally narrower.
-- Continue deepening fixture-specific Org assertions and expand exact-output
-  comparisons where Org formatting has a stable upstream-independent contract.
+- Review intentional Org snapshot changes together with their extraction logic
+  and keep fixture-specific semantic assertions for failures that a mechanical
+  snapshot update could otherwise conceal.

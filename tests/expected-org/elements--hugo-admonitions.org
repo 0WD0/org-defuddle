@@ -1,0 +1,28 @@
+* Hugo admonitions test
+:PROPERTIES:
+:WORD_COUNT: 44
+:END:
+
+Here is some content before the admonitions.
+
+#+begin_quote
+[!info] Note
+This is an informational note about the topic.
+#+end_quote
+
+#+begin_quote
+[!warning] Warning
+Be careful when modifying these settings.
+#+end_quote
+
+#+begin_quote
+[!danger] Danger
+This action cannot be undone.
+#+end_quote
+
+#+begin_quote
+[!tip] Helpful tip
+Use this shortcut to save time.
+#+end_quote
+
+Here is some content after the admonitions.

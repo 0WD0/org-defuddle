@@ -1,0 +1,26 @@
+* Personal style guide
+:PROPERTIES:
+:URL: https://content-patterns--content-list-with-internal-links/
+:AUTHOR: Jane Doe
+:SITE: Example Blog
+:DOMAIN: content-patterns--content-list-with-internal-links
+:DESCRIPTION: A guide to personal style choices.
+:LANGUAGE: en
+:WORD_COUNT: 130
+:END:
+
+Style emerges from consistency, and having a style opens your imagination. Your mind should be flexible, but your process should be repeatable.
+
+A style can be a system, a pattern, a set of personal guidelines. Here are a few of mine:
+
+- I wear monochromatic clothing without logos
+- I use a specific date format everywhere
+- I pluralize tag and folder names (e.g. groups not group)
+- I use [[https://content-patterns--content-list-with-internal-links/plain-text][plain text files]] for all my writing
+- I ask myself [[https://content-patterns--content-list-with-internal-links/annual-review][reflection questions every year]]
+- I meal prep lunches every week, and exercise twice a week
+- I write [[https://content-patterns--content-list-with-internal-links/brevity][short essays]], less than 500 words
+
+Collect constraints you enjoy. Unusual constraints make things more fun. You can always change them later.
+
+Having a style collapses hundreds of future decisions into one, and gives you focus.

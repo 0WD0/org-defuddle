@@ -1,0 +1,20 @@
+* Loose footnotes: bold-wrapped sup with trailing content
+:PROPERTIES:
+:WORD_COUNT: 83
+:END:
+
+The protocol handles mobility transparently. [fn:1]
+
+Some care is needed to prevent session hijacking. [fn:2]
+
+There are several candidate protocols. [fn:3]
+
+In conclusion, the approach is promising.
+
+*Update 2024-06-01:* A follow-up discussion has been posted on the project blog.
+
+[fn:1] *Note 2024-01-15:* This also works with legacy addressing and NAT traversal.
+
+[fn:2] *Note 2024-01-10:* A simple challenge-response exchange during handshake is sufficient to prevent hijacking by outside attackers.
+
+[fn:3] *Note 2024-03-20:* Besides the primary candidate, there are several other proposals with similar properties.

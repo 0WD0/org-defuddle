@@ -1,0 +1,31 @@
+* Sample Technical Post
+:PROPERTIES:
+:LANGUAGE: en
+:WORD_COUNT: 49
+:END:
+
+This post shows how to use the sample API. Here is the code:
+
+#+begin_src sh
+echo hello
+#+end_src
+
+Here is a longer example with multiple lines:
+
+#+begin_src cpp
+#include <iostream>
+
+int main() {
+  std::cout << "hello";
+  return 0;
+}
+#+end_src
+
+And a plain text block:
+
+#+begin_src
+foo bar
+baz qux
+#+end_src
+
+That is all for this post.

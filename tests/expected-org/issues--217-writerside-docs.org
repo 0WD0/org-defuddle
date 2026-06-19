@@ -1,0 +1,30 @@
+* API Reference
+:PROPERTIES:
+:URL: https://www.example.com/help/docs/api-reference.html
+:SITE: Documentation
+:DOMAIN: example.com
+:LANGUAGE: en-US
+:WORD_COUNT: 44
+:END:
+
+** Methods
+
+Use these methods to interact with the API.
+
+[[https://developer.example.com/docs/getItems][getItems()]]
+
+Returns a list of items. For example:
+
+#+begin_src http
+GET https://api.example.com/items
+
+> {%
+    console.log(response.status)
+%}
+#+end_src
+
+[[https://developer.example.com/docs/createItem][createItem(data)]]
+
+Creates a new item with the provided data.
+
+See the full reference for more details.

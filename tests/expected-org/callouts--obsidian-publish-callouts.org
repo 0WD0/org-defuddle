@@ -1,0 +1,66 @@
+* Callouts
+:PROPERTIES:
+:URL: https://publish.example.com/help/callouts
+:SITE: Example Help
+:DOMAIN: publish.example.com
+:LANGUAGE: en
+:WORD_COUNT: 97
+:END:
+
+To create a callout, add ~[!info]~ to the first line of a blockquote.
+
+#+begin_src markdown
+> [!info] A callout title
+> Here is the callout **body** content.
+#+end_src
+
+#+begin_quote
+[!info] A callout title
+Here is the callout *body* content.
+#+end_quote
+
+*** Foldable callouts
+
+A minus sign collapses the callout.
+
+#+begin_src markdown
+> [!faq]- Is this foldable?
+> Yes, the content is hidden when collapsed.
+#+end_src
+
+#+begin_quote
+[!question]- Is this foldable?
+Yes, the content is hidden when collapsed.
+#+end_quote
+
+*** Supported types
+
+Each type has a different color and icon.
+
+#+begin_quote
+[!note] Note
+#+begin_src md
+> [!note]
+> Lorem ipsum dolor sit amet
+#+end_src
+#+end_quote
+
+#+begin_quote
+[!abstract]- Abstract
+#+begin_src md
+> [!abstract]
+> Lorem ipsum dolor sit amet
+#+end_src
+#+end_quote
+
+Aliases: ~summary~, ~tldr~
+
+#+begin_quote
+[!tip]- Tip
+#+begin_src md
+> [!tip]
+> Lorem ipsum dolor sit amet
+#+end_src
+#+end_quote
+
+Aliases: ~hint~, ~important~

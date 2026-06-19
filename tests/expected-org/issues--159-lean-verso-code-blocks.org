@@ -1,0 +1,15 @@
+* Dependent Type Theory
+:PROPERTIES:
+:URL: https://lean-lang.org/theorem_proving_in_lean4/dependent_type_theory.html
+:DOMAIN: lean-lang.org
+:LANGUAGE: en
+:WORD_COUNT: 114
+:END:
+
+This fixture simulates a documentation page where highlighted code is rendered as a standalone ~code.hl.block~ element instead of a ~pre~ wrapper. Defuddle should preserve this as a fenced code block and should not expand internal links into markdown link syntax inside code. The surrounding prose is intentionally long enough to make main-content detection stable in tests and avoid scoring noise.
+
+#+begin_src lean
+def m : Nat := 1       -- m is a natural number
+#+end_src
+
+Additional text after the code block verifies that extraction continues normally and that the code is treated as block content rather than inline text. This also helps ensure the markdown output remains readable and that the issue does not regress in future updates.

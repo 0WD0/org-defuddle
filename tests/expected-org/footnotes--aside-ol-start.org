@@ -1,0 +1,27 @@
+* Article with Aside Footnotes
+:PROPERTIES:
+:LANGUAGE: en
+:WORD_COUNT: 90
+:END:
+
+We built a new library. [fn:1]
+
+If that was enough of a pitch, [[https://example.com/docs][check it out here]].
+
+If not, let me explain why it matters.
+
+** What is property-based testing?
+
+The main [fn:2] benefits are:
+
+- High-quality generators for building test inputs.
+- Automatic shrinking to minimal failing examples. [fn:3]
+- A test database that replays failures fast.
+
+Shrinking is remarkably useful in practice.
+
+[fn:1] It's a philosophy joke.
+
+[fn:2] There are other benefits too, but these are the ones you notice first.
+
+[fn:3] Shrinking finds the smallest input that triggers the bug. See [[https://example.com/shrinking][this post]] for details.

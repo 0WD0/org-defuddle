@@ -1,0 +1,8 @@
+* Page with Hero Section
+:PROPERTIES:
+:WORD_COUNT: 22
+:END:
+
+This is the hero section with important introductory content that should not be removed.
+
+This is the main body of the article.

@@ -93,17 +93,32 @@
   (file-name-directory (or load-file-name buffer-file-name default-directory))
   "Directory containing org-defuddle.el.")
 
+(defconst org-defuddle--module-version "v0.1.0"
+  "GitHub release containing the native module required by this package.")
+
+(defconst org-defuddle--github-release-url
+  "https://github.com/LuciusChen/org-defuddle/releases"
+  "Base URL for org-defuddle GitHub releases.")
+
+(defun org-defuddle--installed-module-file ()
+  "Return the default per-user native module path."
+  (expand-file-name
+   (concat "liborg_defuddle_module" module-file-suffix)
+   (expand-file-name "modules" user-emacs-directory)))
+
 (defgroup org-defuddle nil
   "Extract readable web pages into Org using a Rust dynamic module."
   :group 'org
   :prefix "org-defuddle-")
 
-(defcustom org-defuddle-module-file nil
+(defcustom org-defuddle-module-file (org-defuddle--installed-module-file)
   "Path to the compiled org-defuddle dynamic module.
 
-When nil, `org-defuddle-load-module' tries the repository-local
-Cargo release output."
-  :type '(choice (const :tag "Auto-detect" nil) file)
+The default is a persistent directory under `user-emacs-directory'.
+`org-defuddle-download-module' installs the pre-built GitHub release
+asset here.  A repository-local Cargo release build remains available
+as a development fallback when this file does not exist."
+  :type 'file
   :group 'org-defuddle)
 
 (defcustom org-defuddle-cli-file nil
@@ -224,18 +239,96 @@ language order."
 
 (defvar org-defuddle--module-loaded nil)
 
+(defconst org-defuddle--module-functions
+  '(org-defuddle-module-parse-json
+    org-defuddle-module-parse-json-with-options
+    org-defuddle-module-parse-org
+    org-defuddle-module-parse-property
+    org-defuddle-module-parse-org-with-options
+    org-defuddle-module-parse-property-with-options
+    org-defuddle-module-parse-c2-json
+    org-defuddle-module-parse-c2-org
+    org-defuddle-module-parse-x-oembed-json
+    org-defuddle-module-parse-x-oembed-org
+    org-defuddle-module-parse-fxtwitter-json
+    org-defuddle-module-parse-fxtwitter-org
+    org-defuddle-module-bilibili-video-info
+    org-defuddle-module-bilibili-subtitle-info
+    org-defuddle-module-parse-bilibili-json
+    org-defuddle-module-parse-bilibili-org
+    org-defuddle-module-youtube-caption-info
+    org-defuddle-module-parse-youtube-json
+    org-defuddle-module-parse-youtube-org)
+  "Functions that must be provided by the Rust dynamic module.")
+
 (defun org-defuddle--repo-root ()
   "Return the repository root when this file is loaded from the source tree."
   org-defuddle--source-directory)
 
 (defun org-defuddle--default-module-file ()
-  "Return the default dynamic module path for the current platform."
+  "Return the repository-local dynamic module path for development."
   (let* ((root (org-defuddle--repo-root))
          (lib (cond
                ((eq system-type 'darwin) "liborg_defuddle_module.dylib")
                ((eq system-type 'windows-nt) "org_defuddle_module.dll")
                (t "liborg_defuddle_module.so"))))
     (expand-file-name (concat "target/release/" lib) root)))
+
+(defun org-defuddle--existing-module-file ()
+  "Return an installed or repository-local dynamic module path."
+  (cond
+   ((and org-defuddle-module-file
+         (file-exists-p org-defuddle-module-file))
+    org-defuddle-module-file)
+   ((file-exists-p (org-defuddle--default-module-file))
+    (org-defuddle--default-module-file))))
+
+(defun org-defuddle--module-architecture ()
+  "Return the Rust target architecture for this Emacs process."
+  (cond
+   ((string-match-p "aarch64\\|arm64" system-configuration) "aarch64")
+   ((string-match-p "x86_64" system-configuration) "x86_64")
+   (t (user-error "Unsupported architecture: %s" system-configuration))))
+
+(defun org-defuddle--module-target-triple ()
+  "Return the release target triple for this Emacs process."
+  (let ((architecture (org-defuddle--module-architecture)))
+    (cond
+     ((eq system-type 'darwin)
+      (concat architecture "-apple-darwin"))
+     ((eq system-type 'gnu/linux)
+      (concat architecture "-unknown-linux-gnu"))
+     ((eq system-type 'windows-nt)
+      (unless (string= architecture "x86_64")
+        (user-error "Unsupported Windows architecture: %s" architecture))
+      "x86_64-pc-windows-msvc")
+     (t (user-error "Unsupported platform: %s" system-type)))))
+
+(defun org-defuddle--module-release-asset ()
+  "Return the pre-built release asset name for this platform."
+  (format "liborg-defuddle-%s%s"
+          (org-defuddle--module-target-triple)
+          module-file-suffix))
+
+(defun org-defuddle--module-download-url ()
+  "Return the pinned pre-built module download URL for this package."
+  (format "%s/download/%s/%s"
+          org-defuddle--github-release-url
+          org-defuddle--module-version
+          (org-defuddle--module-release-asset)))
+
+(defun org-defuddle--verify-module-functions (module-file)
+  "Verify that MODULE-FILE provided every required module function."
+  (dolist (function org-defuddle--module-functions)
+    (unless (fboundp function)
+      (error "Org-defuddle module at %s is missing entry point %s"
+             module-file function))))
+
+(defun org-defuddle--load-module-file (module-file)
+  "Load and verify the dynamic module at MODULE-FILE."
+  (module-load module-file)
+  (org-defuddle--verify-module-functions module-file)
+  (setq org-defuddle--module-loaded t))
 
 (defun org-defuddle--default-cli-file ()
   "Return the default org-defuddle CLI path for the current platform."
@@ -251,17 +344,53 @@ language order."
     (and (file-executable-p cli-file) cli-file)))
 
 ;;;###autoload
-(defun org-defuddle-load-module ()
-  "Load the Rust dynamic module."
+(defun org-defuddle-download-module (&optional path)
+  "Download and load the pinned pre-built Rust module.
+
+Install the module at PATH, defaulting to `org-defuddle-module-file'."
   (interactive)
+  (setq path (expand-file-name
+              (or path org-defuddle-module-file
+                  (org-defuddle--installed-module-file))))
+  (let* ((directory (file-name-directory path))
+         (url (org-defuddle--module-download-url))
+         (temporary-file nil))
+    (unless (string-prefix-p "https://" url)
+      (error "Refusing non-HTTPS module download URL: %s" url))
+    (make-directory directory t)
+    (setq temporary-file
+          (make-temp-file (expand-file-name ".org-defuddle-module-" directory)))
+    (unwind-protect
+        (progn
+          (message "Downloading org-defuddle module from %s..." url)
+          (url-copy-file url temporary-file t)
+          (rename-file temporary-file path t)
+          (setq temporary-file nil)
+          (if org-defuddle--module-loaded
+              (message "Org-defuddle module installed at %s; restart Emacs to load it"
+                       path)
+            (org-defuddle--load-module-file path)
+            (message "Org-defuddle module installed and loaded from %s" path)))
+      (when (and temporary-file (file-exists-p temporary-file))
+        (delete-file temporary-file)))))
+
+;;;###autoload
+(defun org-defuddle-load-module (&optional offer-download)
+  "Load the Rust dynamic module.
+
+When OFFER-DOWNLOAD is non-nil and no module is installed, ask whether
+to download the pinned pre-built GitHub release.  Interactive calls set
+OFFER-DOWNLOAD automatically."
+  (interactive (list t))
   (unless org-defuddle--module-loaded
-    (let ((module-file (or org-defuddle-module-file
-                           (org-defuddle--default-module-file))))
-      (unless (file-exists-p module-file)
-        (user-error "Org-defuddle module not found: %s; run cargo build --release -p org-defuddle-module"
-                    module-file))
-      (module-load module-file)
-      (setq org-defuddle--module-loaded t))))
+    (if-let* ((module-file (org-defuddle--existing-module-file)))
+        (org-defuddle--load-module-file module-file)
+      (if (and offer-download
+               (yes-or-no-p
+                "Org-defuddle module not found; download pre-built release? "))
+          (org-defuddle-download-module)
+        (user-error
+         "Org-defuddle module not found; run M-x org-defuddle-download-module")))))
 
 (defun org-defuddle--option (options key default)
   "Return OPTIONS value for KEY, or DEFAULT when KEY is absent."
@@ -580,7 +709,8 @@ HEADERS, METHOD, and DATA configure the request."
 (defun org-defuddle--retrieve-body-with-cli (url callback headers method data)
   "Fetch URL with the Rust CLI and call CALLBACK with the response body.
 
-On CLI failure, fall back to `org-defuddle--retrieve-body-with-url'."
+HEADERS, METHOD, and DATA configure the request.  On CLI failure, fall
+back to `org-defuddle--retrieve-body-with-url'."
   (let* ((buffer (generate-new-buffer " *org-defuddle-fetch*"))
          (command (org-defuddle--cli-fetch-command url headers method data)))
     (make-process
@@ -1100,9 +1230,11 @@ the same keys as `org-defuddle-parse-html'."
 (defun org-defuddle-buffer-to-org (&optional url options)
   "Extract the current buffer's HTML into a new Org buffer.
 
-URL is used for metadata and relative URL resolution.  OPTIONS is passed
-to `org-defuddle-html-to-org'."
+  URL is used for metadata and relative URL resolution.  OPTIONS is passed
+  to `org-defuddle-html-to-org'."
   (interactive)
+  (when (called-interactively-p 'interactive)
+    (org-defuddle-load-module t))
   (let* ((html (buffer-substring-no-properties (point-min) (point-max)))
          (org (org-defuddle-html-to-org html url options))
          (buffer (generate-new-buffer "*org-defuddle*")))
@@ -1351,8 +1483,10 @@ HTML extraction path."
 OPTIONS is passed to `org-defuddle-html-to-org' for HTML pages.  C2 Wiki
 and supported X/Twitter, Bilibili, YouTube, and Reddit URLs use API or
 alternate-host extraction before falling back to their original HTML.
-`:use-async' overrides `org-defuddle-use-async'."
+  `:use-async' overrides `org-defuddle-use-async'."
   (interactive "sURL: ")
+  (when (called-interactively-p 'interactive)
+    (org-defuddle-load-module t))
   (if (not (org-defuddle--use-async-option options))
       (org-defuddle--html-url-to-org url options)
     (let ((c2-title (org-defuddle--c2-page-title url))

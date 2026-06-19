@@ -1,0 +1,22 @@
+* Sample Python Tutorial
+:PROPERTIES:
+:LANGUAGE: en
+:WORD_COUNT: 27
+:END:
+
+*** Imports
+
+First, import the required modules:
+
+#+begin_src
+import torch
+from torch import nn
+#+end_src
+
+Then define the model:
+
+#+begin_src
+class Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+#+end_src

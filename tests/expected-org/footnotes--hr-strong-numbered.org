@@ -1,0 +1,14 @@
+* Loose footnotes: strong-numbered after hr
+:PROPERTIES:
+:WORD_COUNT: 31
+:END:
+
+The first concept is well-established. [fn:1]
+
+The second concept is more nuanced. [fn:2]
+
+Concluding thoughts.
+
+[fn:1] First footnote explanation. - Supporting point A. - Supporting point B.
+
+[fn:2] Second footnote with additional context.

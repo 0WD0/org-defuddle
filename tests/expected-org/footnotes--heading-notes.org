@@ -1,0 +1,14 @@
+* Loose footnotes: heading delimiter
+:PROPERTIES:
+:WORD_COUNT: 29
+:END:
+
+The first observation is notable. [fn:1]
+
+The second finding contradicts it. [fn:2]
+
+Both deserve further study.
+
+[fn:1] First note with supporting detail.
+
+[fn:2] Second note with additional context.

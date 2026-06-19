@@ -1,0 +1,14 @@
+* Patch 1.2.3 is now LIVE!
+:PROPERTIES:
+:URL: https://store.example.com/news/app/123456/view/987654321
+:AUTHOR: Example Game
+:PUBLISHED: 2025-01-15T12:00:00.000Z
+:DOMAIN: store.example.com
+:WORD_COUNT: 32
+:END:
+
+Patch 1.2.3 is now live! This is build 500, network compatible. Available on all platforms! You can read the [[https://docs.example.com/patch-123][full patch notes here]].
+
+Or, watch the video patch notes below:
+
+[[https://www.youtube.com/watch?v=dQw4w9WgXcQ]]

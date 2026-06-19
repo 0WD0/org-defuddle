@@ -1,0 +1,17 @@
+* Gemini - Math response
+:PROPERTIES:
+:URL: https://gemini.google.com/app
+:DOMAIN: gemini.google.com
+:LANGUAGE: en
+:WORD_COUNT: 13
+:END:
+
+*** Predicate Logic
+
+$\forall x (M(x) \rightarrow D(x))$ — For all $x$, if $x$ is a man, then $x$ is mortal.
+
+*** Quadratic Formula
+
+$$
+x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+$$

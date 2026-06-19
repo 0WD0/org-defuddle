@@ -1,0 +1,21 @@
+* Dependent Type Theory
+:PROPERTIES:
+:URL: https://lean-lang.org/theorem_proving_in_lean4/Dependent-Type-Theory/
+:DOMAIN: lean-lang.org
+:LANGUAGE: en
+:WORD_COUNT: 37
+:END:
+
+This fixture ensures empty Verso code blocks are preserved as blank lines when adjacent Lean command and output fragments are merged.
+
+#+begin_src lean
+#check true
+Bool.true : Bool
+
+/- Evaluate -/
+
+#eval 5 * 4
+20
+#+end_src
+
+Trailing prose ensures normal extraction continues.

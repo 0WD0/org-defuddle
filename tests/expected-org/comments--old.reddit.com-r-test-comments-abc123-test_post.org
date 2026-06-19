@@ -1,0 +1,51 @@
+* Test Post
+:PROPERTIES:
+:URL: https://old.reddit.com/r/test/comments/abc123/test_post
+:AUTHOR: poster_user
+:PUBLISHED: 2025-01-15T10:30:00Z
+:SITE: r/test
+:DOMAIN: old.reddit.com
+:DESCRIPTION: This is the post body with some content.
+:WORD_COUNT: 117
+:END:
+
+This is the post body with some content.
+
+-----
+
+** Comments
+
+#+begin_quote
+*user_alpha* · [[https://reddit.com/r/test/comments/abc123/test_post/comment1/][2025-01-15]] · 42 points
+
+This is a top-level comment with some thoughts on the topic.
+
+#+begin_quote
+*user_beta* · [[https://reddit.com/r/test/comments/abc123/test_post/comment2/][2025-01-15]] · 15 points
+
+Great point! I agree with this.
+
+#+begin_quote
+*user_alpha* · [[https://reddit.com/r/test/comments/abc123/test_post/comment3/][2025-01-15]] · 8 points
+
+Thanks for the reply!
+
+#+end_quote
+
+#+end_quote
+
+#+begin_quote
+*user_gamma* · [[https://reddit.com/r/test/comments/abc123/test_post/comment4/][2025-01-15]] · 3 points
+
+Different perspective here.
+
+#+end_quote
+
+#+end_quote
+
+#+begin_quote
+*user_delta* · [[https://reddit.com/r/test/comments/abc123/test_post/comment5/][2025-01-15]] · 20 points
+
+Another top-level comment with a [[https://example.com/][link]].
+
+#+end_quote

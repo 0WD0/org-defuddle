@@ -1,0 +1,28 @@
+* Quickstart
+:PROPERTIES:
+:URL: https://example.com/docs/quickstart
+:SITE: Example Docs
+:DOMAIN: example.com
+:DESCRIPTION: Get started quickly.
+:WORD_COUNT: 38
+:END:
+
+Install the package and run your first job:
+
+#+begin_src
+			npm install example-sdk
+
+const sdk = require('example-sdk');
+const result = await sdk.run({ task: 'hello' });
+console.log(result);
+#+end_src
+
+You can also pass options:
+
+#+begin_src typescript
+			interface Options {
+  task: string;
+  model?: string;
+  maxSteps?: number;
+}
+#+end_src

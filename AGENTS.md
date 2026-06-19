@@ -77,6 +77,7 @@ cargo test --workspace
 cargo build --release -p org-defuddle-module
 cargo build --release -p org-defuddle-cli
 emacs --batch -Q --eval '(byte-compile-file "org-defuddle.el")'
+emacs --batch -Q -L . -L test -l test/org-defuddle-test.el -f ert-run-tests-batch-and-exit
 ```
 
 For changes to module loading or Elisp wrapper behavior, also run an

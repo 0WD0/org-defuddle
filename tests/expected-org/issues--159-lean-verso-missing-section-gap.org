@@ -1,0 +1,20 @@
+* Dependent Type Theory
+:PROPERTIES:
+:URL: https://lean-lang.org/theorem_proving_in_lean4/Dependent-Type-Theory/
+:DOMAIN: lean-lang.org
+:LANGUAGE: en
+:WORD_COUNT: 44
+:END:
+
+This fixture verifies we preserve an intentional blank line between adjacent Verso code fragments when one fragment ends with an extra newline before the next section header.
+
+#+begin_src lean
+def b2 : Bool := false
+
+/- Check their types. -/
+
+#check m
+m : Nat
+#+end_src
+
+Trailing prose ensures extraction continues normally.

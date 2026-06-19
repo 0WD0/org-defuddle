@@ -1,0 +1,17 @@
+* Test User (@testuser)
+:PROPERTIES:
+:URL: https://substack.com/@testuser/note/c-123456789
+:AUTHOR: Test User
+:SITE: Substack
+:DOMAIN: substack.com
+:DESCRIPTION: Sample note text for testing the Substack extractor.
+:IMAGE: https://example.com/image/full-res.jpg
+:LANGUAGE: en
+:WORD_COUNT: 25
+:END:
+
+Sample note text for testing the Substack extractor.
+
+It has multiple paragraphs to verify the content is captured correctly.
+
+[[https://example.com/image/full-res.jpg]]

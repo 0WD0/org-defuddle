@@ -1,0 +1,13 @@
+* LaTeX Image Rendering Services
+:PROPERTIES:
+:LANGUAGE: en
+:WORD_COUNT: 8
+:END:
+
+Inline fraction: $\frac{a}{b}$.
+
+Sum notation: $\sum_{i=1}^{n}a_i$.
+
+Greek letters: $\alpha+\beta$.
+
+Path-based service: $\frac{m}{v}$.

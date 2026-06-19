@@ -1,0 +1,15 @@
+* Product Update
+:PROPERTIES:
+:WORD_COUNT: 45
+:END:
+
+This release includes several improvements to image processing.
+
+- /Higher resolution/. The system now processes images at up to 4096 pixels, more than three times the previous limit. [fn:1]
+- /Better accuracy/. Internal testing showed significant improvements in accuracy. [fn:2]
+
+Users can start using these features immediately.
+
+[fn:1] This is a [[https://example.com/docs/vision][configuration change]] rather than an API parameter, so images will be processed at higher fidelity automatically. - Benchmark A: scores reflect revised grading methodology. - Benchmark B: memorization screens flag a subset of problems.
+
+[fn:2] Based on internal evaluations using standardized test harnesses.

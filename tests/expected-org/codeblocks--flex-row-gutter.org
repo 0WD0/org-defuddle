@@ -1,0 +1,25 @@
+* Agent Architecture
+:PROPERTIES:
+:URL: https://example.com/engineering/agent-architecture
+:SITE: Example Engineering
+:DOMAIN: example.com
+:DESCRIPTION: How we structured our multi-agent codebase.
+:WORD_COUNT: 35
+:END:
+
+Here is the top-level directory layout for the project:
+
+**** Plain Text
+
+#+begin_src
+AGENTS.md
+ARCHITECTURE.md
+docs/
+├── design-docs/
+│   ├── index.md
+│   └── core-beliefs.md
+src/
+└── main.ts
+#+end_src
+
+Each agent is defined in its own module under ~src/agents/~.

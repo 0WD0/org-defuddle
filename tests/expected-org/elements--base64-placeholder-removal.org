@@ -1,0 +1,22 @@
+* Base64 Placeholder Image Handling
+:PROPERTIES:
+:URL: https://www.example.com/article/base64-test
+:DOMAIN: example.com
+:WORD_COUNT: 66
+:END:
+
+** Base64 Placeholder Images
+
+This article tests removal of unresolvable base64 placeholder images while preserving resolvable ones.
+
+Some article text between images with enough words for content detection to function properly here.
+
+[[https://www.example.com/images/resolved.webp][Resolvable from picture source.]]
+
+Resolvable from picture source. Photo credit.
+
+More article text with enough content for the parser to work with on this test article page.
+
+[[https://www.example.com/images/lazy-loaded.jpg][Resolvable from data-src.]] [[https://www.example.com/images/real-image.jpg][A real image.]]
+
+Final paragraph with concluding article text for the content detection scoring algorithm.

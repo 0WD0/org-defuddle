@@ -25480,11 +25480,34 @@ fn escape_table_cell(text: &str) -> String {
 fn escape_markdown_text(text: &str) -> String {
     static TAG_LIKE_RE: Lazy<Regex> =
         Lazy::new(|| Regex::new(r"<(/?[A-Za-z][A-Za-z0-9-]*(?:\s|/?>))").unwrap());
+    static LEADING_EQUALS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(=+)").unwrap());
+    static LEADING_HEADING_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(#{1,6}) ").unwrap());
+    static LEADING_ORDERED_LIST_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d+)\. ").unwrap());
 
-    let escaped = text
+    let mut escaped = text
         .replace('\\', "\\\\")
+        .replace('*', "\\*")
+        .replace('`', "\\`")
         .replace('[', "\\[")
-        .replace(']', "\\]");
+        .replace(']', "\\]")
+        .replace('_', "\\_");
+    if escaped.starts_with('-') {
+        escaped.insert(0, '\\');
+    }
+    if escaped.starts_with("+ ") {
+        escaped.insert(0, '\\');
+    }
+    escaped = LEADING_EQUALS_RE.replace(&escaped, r"\$1").into_owned();
+    escaped = LEADING_HEADING_RE.replace(&escaped, r"\$1 ").into_owned();
+    if escaped.starts_with("~~~") {
+        escaped.insert(0, '\\');
+    }
+    if escaped.starts_with('>') {
+        escaped.insert(0, '\\');
+    }
+    escaped = LEADING_ORDERED_LIST_RE
+        .replace(&escaped, r"$1\. ")
+        .into_owned();
     TAG_LIKE_RE.replace_all(&escaped, r"\<$1").into_owned()
 }
 
@@ -34341,6 +34364,36 @@ line break text.">
         );
         assert!(wbr_text.contains("Supercalifragilistic"));
         assert!(wbr_text.contains("[longword](https://example.com)"));
+
+        let escaped_markdown_syntax = html_fragment_to_markdown(
+            r#"<article>
+              <p>literal *stars* and snake_case with `ticks` and [brackets]</p>
+              <p>- not a list item</p>
+              <p>+ not another list item</p>
+              <p>=== not a setext heading</p>
+              <p>### not an ATX heading</p>
+              <p>~~~ not a fence</p>
+              <p>&gt; not a quote</p>
+              <p>12. not an ordered item</p>
+              <p>path\name</p>
+            </article>"#,
+        );
+        for escaped in [
+            r"literal \*stars\* and snake\_case with \`ticks\` and \[brackets\]",
+            r"\- not a list item",
+            r"\+ not another list item",
+            r"\=== not a setext heading",
+            r"\### not an ATX heading",
+            r"\~~~ not a fence",
+            r"\> not a quote",
+            r"12\. not an ordered item",
+            r"path\\name",
+        ] {
+            assert!(
+                escaped_markdown_syntax.contains(escaped),
+                "missing {escaped:?} in {escaped_markdown_syntax:?}"
+            );
+        }
 
         let wider_body_rows = html_fragment_to_markdown(
             r#"<article>

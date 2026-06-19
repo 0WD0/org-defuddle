@@ -1,0 +1,16 @@
+* Example Post
+:PROPERTIES:
+:URL: https://www.example.com/blog/example-post
+:DOMAIN: example.com
+:WORD_COUNT: 15
+:END:
+
+Here is an architecture diagram:
+
+[[https://www.example.com/images/architecture.png?imwidth=3840][Architecture diagram.]]
+
+And here is a second diagram:
+
+[[https://www.example.com/images/flow.png?imwidth=3840][Flow diagram.]]
+
+That concludes our overview.

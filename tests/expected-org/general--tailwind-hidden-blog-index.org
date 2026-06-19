@@ -1,0 +1,40 @@
+* Blog - Acme Corp
+:PROPERTIES:
+:URL: https://tailwind-hidden-blog-index/blog
+:PUBLISHED: 2026-03-01T00:00:00+00:00
+:DOMAIN: tailwind-hidden-blog-index
+:DESCRIPTION: Latest posts from Acme Corp engineering blog.
+:WORD_COUNT: 150
+:END:
+
+** Engineering Blog
+
+Technical insights from the Acme Corp engineering team on infrastructure, machine learning, and design systems.
+
+** Featured
+
+*** [[https://tailwind-hidden-blog-index/blog/scaling-distributed-systems][Scaling Distributed Systems at Acme]]
+
+How we redesigned our message queue infrastructure to handle ten times the throughput while reducing latency by forty percent across all production services.
+
+[[https://tailwind-hidden-blog-index/blog?tag=infrastructure][Infrastructure]] 5 min read March 1, 2026
+
+** Recent Posts
+
+*** [[https://tailwind-hidden-blog-index/blog/ml-pipeline-optimization][Optimizing Our ML Pipeline]]
+
+Reducing model training time from hours to minutes with smart batching and caching strategies across our distributed compute cluster infrastructure.
+
+[[https://tailwind-hidden-blog-index/blog?tag=machine-learning][Machine Learning]] 8 min read February 15, 2026
+
+*** [[https://tailwind-hidden-blog-index/blog/design-system-v2][Introducing Our Design System v2]]
+
+A ground-up rebuild of our component library with accessibility-first principles and comprehensive dark mode support for all client platforms.
+
+[[https://tailwind-hidden-blog-index/blog?tag=design][Design]] 6 min read January 28, 2026
+
+*** [[https://tailwind-hidden-blog-index/blog/api-versioning-strategy][Our API Versioning Strategy]]
+
+How we manage backward compatibility across hundreds of API endpoints while shipping breaking changes safely to thousands of integration partners.
+
+[[https://tailwind-hidden-blog-index/blog?tag=api][API Design]] 7 min read January 10, 2026

@@ -1,0 +1,14 @@
+* Loose footnotes: nested prose div
+:PROPERTIES:
+:WORD_COUNT: 34
+:END:
+
+The first claim is well-established. [fn:1]
+
+The second claim is more contested. [fn:2]
+
+The conclusion follows from both claims.
+
+[fn:1] Supporting evidence for the first claim.
+
+[fn:2] Counterarguments and rebuttal for the second claim.

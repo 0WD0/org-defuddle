@@ -1,0 +1,24 @@
+* Sample Python Post
+:PROPERTIES:
+:LANGUAGE: en
+:WORD_COUNT: 41
+:END:
+
+*** RSA example
+
+Here is the key generation code:
+
+#+begin_src python
+p = 61
+q = 97
+
+print(f"n={p*q}")
+# n=5917
+
+phi = (p-1)*(q-1)
+
+print(f"phi={phi}")
+# phi=5760
+#+end_src
+
+This gives us the public and private keys.

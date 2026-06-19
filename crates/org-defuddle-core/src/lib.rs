@@ -18810,7 +18810,7 @@ impl MarkdownRenderer {
             "figure" => self.render_figure(node),
             "figcaption" => self.render_block_children(node),
             "iframe" => self.render_iframe(element),
-            "video" | "audio" => self.render_media_element(node, element),
+            "video" | "audio" => self.render_raw_html(node, inline),
             "ul" | "ol" => {
                 self.ensure_newline();
                 self.list_depth += 1;
@@ -18830,6 +18830,8 @@ impl MarkdownRenderer {
             "strong" | "b" => self.render_wrapped(node, "**"),
             "em" | "i" => self.render_wrapped(node, "*"),
             "del" | "s" | "strike" => self.render_wrapped(node, "~~"),
+            "mark" => self.render_wrapped(node, "=="),
+            "sup" | "sub" => self.render_raw_inline_html(node),
             "article" | "main" | "section" | "div" | "body" | "html" => {
                 for child in node.children() {
                     self.render_node(&child, inline);
@@ -18838,7 +18840,7 @@ impl MarkdownRenderer {
                     self.ensure_newline();
                 }
             }
-            "svg" => {}
+            "svg" => self.render_raw_html(node, inline),
             _ => {
                 for child in node.children() {
                     self.render_node(&child, inline);
@@ -18864,12 +18866,51 @@ impl MarkdownRenderer {
         let Some(src) = element.attributes.borrow().get("src").map(str::to_owned) else {
             return;
         };
+        if let Some(link) = normalize_embed_link(&src) {
+            self.render_block_image_link(&link);
+            return;
+        }
         self.render_block_link(&src);
     }
 
-    fn render_media_element(&mut self, node: &NodeRef, element: &ElementData) {
-        if let Some(src) = media_element_source(node, element) {
-            self.render_block_link(&src);
+    fn render_raw_html(&mut self, node: &NodeRef, inline: bool) {
+        if inline {
+            self.render_raw_inline_html(node);
+        } else {
+            self.render_raw_block_html(node);
+        }
+    }
+
+    fn render_raw_block_html(&mut self, node: &NodeRef) {
+        let Ok(html) = serialize_node(node) else {
+            return;
+        };
+        let html = html.trim();
+        if html.is_empty() {
+            return;
+        }
+        self.ensure_blank_line();
+        self.out.push_str(html);
+        self.out.push_str("\n\n");
+    }
+
+    fn render_raw_inline_html(&mut self, node: &NodeRef) {
+        let Ok(html) = serialize_node(node) else {
+            return;
+        };
+        let html = html.trim();
+        if html.is_empty() {
+            return;
+        }
+        if previous_sibling_ends_with_whitespace(node)
+            && !self.out.chars().last().is_some_and(char::is_whitespace)
+            && needs_space_before(&self.out, html)
+        {
+            self.out.push(' ');
+        }
+        self.out.push_str(html);
+        if next_sibling_starts_without_whitespace(node) {
+            self.suppress_next_space = true;
         }
     }
 
@@ -18882,6 +18923,17 @@ impl MarkdownRenderer {
         self.out.push('<');
         self.out.push_str(&escape_markdown_url(url));
         self.out.push_str(">\n\n");
+    }
+
+    fn render_block_image_link(&mut self, url: &str) {
+        let url = url.trim();
+        if url.is_empty() || is_dangerous_url(url) {
+            return;
+        }
+        self.ensure_blank_line();
+        self.out.push_str("![](");
+        self.out.push_str(&markdown_link_destination(url, None));
+        self.out.push_str(")\n\n");
     }
 
     fn render_block_children(&mut self, node: &NodeRef) {
@@ -23205,6 +23257,36 @@ fn needs_space_before(out: &str, text: &str) -> bool {
     !last.is_whitespace()
         && !matches!(last, '(' | '[' | '{')
         && !matches!(first, '.' | ',' | ':' | ';' | '!' | '?' | ')' | ']' | '}')
+}
+
+fn previous_sibling_ends_with_whitespace(node: &NodeRef) -> bool {
+    let mut current = node.previous_sibling();
+    while let Some(sibling) = current {
+        match sibling.data() {
+            NodeData::Text(text) => {
+                let text = text.borrow();
+                return text.chars().last().is_some_and(char::is_whitespace);
+            }
+            NodeData::Element(_) => return false,
+            _ => current = sibling.previous_sibling(),
+        }
+    }
+    false
+}
+
+fn next_sibling_starts_without_whitespace(node: &NodeRef) -> bool {
+    let mut current = node.next_sibling();
+    while let Some(sibling) = current {
+        match sibling.data() {
+            NodeData::Text(text) => {
+                let text = text.borrow();
+                return text.chars().next().is_some_and(|c| !c.is_whitespace());
+            }
+            NodeData::Element(_) => return false,
+            _ => current = sibling.next_sibling(),
+        }
+    }
+    false
 }
 
 fn escape_org_headline(text: &str) -> String {
@@ -30619,6 +30701,40 @@ line break text.">
         assert!(escaped_pipe_header.contains("A \\| B"));
         assert!(escaped_pipe_header.contains("| --- | --- |"));
         assert!(!escaped_pipe_header.contains("| --- | --- | --- |"));
+    }
+
+    #[test]
+    fn markdown_conversion_preserves_upstream_raw_and_embed_rules() {
+        let inline_raw = html_fragment_to_markdown(
+            r#"<article><p>E = mc<sup>2</sup> and H<sub>2</sub>O with <mark>highlight</mark>.</p></article>"#,
+        );
+        assert!(inline_raw.contains("mc<sup>2</sup> and H<sub>2</sub>O"));
+        assert!(inline_raw.contains("==highlight=="));
+
+        let raw_media = html_fragment_to_markdown(
+            r#"<article>
+              <video controls src="https://example.com/video.mp4"></video>
+              <audio controls><source src="https://example.com/audio.mp3" type="audio/mpeg"></audio>
+              <svg viewBox="0 0 10 10"><text>2.0</text></svg>
+            </article>"#,
+        );
+        assert!(raw_media.contains("<video"));
+        assert!(raw_media.contains("https://example.com/video.mp4"));
+        assert!(raw_media.contains("<audio"));
+        assert!(raw_media.contains("https://example.com/audio.mp3"));
+        assert!(raw_media.contains("<svg"));
+        assert!(raw_media.contains("2.0"));
+
+        let embeds = html_fragment_to_markdown(
+            r#"<article>
+              <iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ"></iframe>
+              <iframe src="https://platform.twitter.com/embed/Tweet.html?id=12345"></iframe>
+              <iframe src="https://open.spotify.com/embed/track/abc123"></iframe>
+            </article>"#,
+        );
+        assert!(embeds.contains("![](https://www.youtube.com/watch?v=dQw4w9WgXcQ)"));
+        assert!(embeds.contains("![](https://x.com/i/status/12345)"));
+        assert!(embeds.contains("<https://open.spotify.com/embed/track/abc123>"));
     }
 
     #[test]

@@ -5,9 +5,28 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use url::Url;
+
+const UPSTREAM_PROFILE_STEPS: &[&str] = &[
+    "cloneDocument",
+    "flattenShadowRoots",
+    "resolveStreamedContent",
+    "applyMobileStyles",
+    "findMainContent",
+    "removeMetadataBlock",
+    "adoptExternalFootnotes",
+    "standardizeFootnotesCallouts",
+    "removeSmallImages",
+    "removeHiddenElements",
+    "removeEyebrowLabel",
+    "removeBySelector",
+    "removeLowScoring",
+    "removeByContentPattern",
+    "standardizeContent",
+    "resolveRelativeUrls",
+];
 
 #[derive(Debug, Error)]
 pub enum DefuddleError {
@@ -741,7 +760,7 @@ pub fn parse_html_to_org(
     if options.content_selector.is_some() {
         attach_content_markdown(&mut result, markdown_enabled);
         attach_frontmatter(&mut result, options.url.as_deref(), options.frontmatter);
-        attach_parse_diagnostics(&mut result, &options, parse_start);
+        attach_parse_diagnostics(&mut result, parse_start);
         return Ok(result);
     }
 
@@ -812,7 +831,7 @@ pub fn parse_html_to_org(
 
     attach_content_markdown(&mut result, markdown_enabled);
     attach_frontmatter(&mut result, options.url.as_deref(), options.frontmatter);
-    attach_parse_diagnostics(&mut result, &options, parse_start);
+    attach_parse_diagnostics(&mut result, parse_start);
     Ok(result)
 }
 
@@ -884,7 +903,10 @@ fn parse_html_to_org_once(
     html: &str,
     options: DefuddleOptions,
 ) -> Result<DefuddleOutput, DefuddleError> {
+    let mut profile = upstream_profile(options.profile);
+    let step_start = Instant::now();
     let document = kuchiki::parse_html().one(html);
+    record_profile(&mut profile, "cloneDocument", step_start);
     if let Some(output) = chatgpt_output(&document, options.url.as_deref(), options.include_images)?
     {
         return Ok(output);
@@ -1001,34 +1023,27 @@ fn parse_html_to_org_once(
     )? {
         return Ok(output);
     }
-    let mut profile = options.profile.then(HashMap::new);
     let mut debug_removals = Vec::new();
 
     let step_start = Instant::now();
     materialize_react_streaming_content(&document);
     record_profile(&mut profile, "resolveStreamedContent", step_start);
 
-    let step_start = Instant::now();
     let schema = extract_json_ld(&document);
-    record_profile(&mut profile, "extractSchemaOrgData", step_start);
 
-    let step_start = Instant::now();
     let mut metadata = extract_metadata(&document, options.url.as_deref());
-    record_profile(&mut profile, "extractMetadata", step_start);
 
-    let step_start = Instant::now();
     let steam_event = extract_steam_event(&document);
     let data_attribute_body_html = steam_event.as_ref().map(|event| event.body_html.as_str());
     let wikipedia_document = is_wikipedia_domain(&metadata.domain)
         && find_node_by_id(&document, "mw-content-text").is_some();
-    record_profile(&mut profile, "extractDataAttributeContent", step_start);
 
     sanitize_schema_fallback_candidate(&document, &schema);
 
     if options.standardize {
         let step_start = Instant::now();
         standardize_callouts(&document);
-        record_profile(&mut profile, "standardizeCallouts", step_start);
+        record_profile(&mut profile, "standardizeFootnotesCallouts", step_start);
     }
 
     if options.remove_hidden_elements {
@@ -1038,16 +1053,14 @@ fn parse_html_to_org_once(
     }
     let step_start = Instant::now();
     normalize_images(&document);
-    record_profile(&mut profile, "normalizeImages", step_start);
+    record_profile(&mut profile, "standardizeContent", step_start);
     if options.remove_small_images {
         let step_start = Instant::now();
         remove_small_images(&document);
         record_profile(&mut profile, "removeSmallImages", step_start);
     }
     if !options.include_images {
-        let step_start = Instant::now();
         remove_content_images(&document);
-        record_profile(&mut profile, "removeImages", step_start);
     }
     if options.remove_exact_selectors || options.remove_partial_selectors {
         let step_start = Instant::now();
@@ -1059,18 +1072,22 @@ fn parse_html_to_org_once(
         }
         record_profile(&mut profile, "removeBySelector", step_start);
     }
-    let step_start = Instant::now();
     remove_elementor_archive_chrome(&document);
     remove_webmention_chrome(&document);
     sanitize_links(&document);
     remove_heading_permalink_anchors(&document);
     let relative_base_url = document_base_url(&document, &metadata.url);
+    let step_start = Instant::now();
     resolve_relative_urls(&document, &relative_base_url);
+    record_profile(&mut profile, "resolveRelativeUrls", step_start);
     remove_lightbox_duplicate_images(&document);
     let mut no_content_pattern_debug = None;
+    let step_start = Instant::now();
     remove_eyebrow_label(&document, &mut no_content_pattern_debug);
+    record_profile(&mut profile, "removeEyebrowLabel", step_start);
+    let step_start = Instant::now();
     remove_orphan_headings(&document);
-    record_profile(&mut profile, "preMainCleanup", step_start);
+    record_profile(&mut profile, "standardizeContent", step_start);
 
     let step_start = Instant::now();
     let extractor_content_selector = options
@@ -1089,7 +1106,7 @@ fn parse_html_to_org_once(
         standardize_container_media_captions(&main);
         standardize_adjacent_media_captions(&main);
     }
-    record_profile(&mut profile, "standardizeMedia", step_start);
+    record_profile(&mut profile, "standardizeContent", step_start);
 
     let step_start = Instant::now();
     let footnotes = if options.standardize {
@@ -1097,7 +1114,13 @@ fn parse_html_to_org_once(
     } else {
         FootnoteState::default()
     };
-    record_profile(&mut profile, "standardizeFootnotes", step_start);
+    let footnote_elapsed = step_start.elapsed();
+    record_profile_elapsed(&mut profile, "adoptExternalFootnotes", footnote_elapsed);
+    record_profile_elapsed(
+        &mut profile,
+        "standardizeFootnotesCallouts",
+        footnote_elapsed,
+    );
     let render_options = RenderOptions {
         standardize: options.standardize,
     };
@@ -1121,13 +1144,11 @@ fn parse_html_to_org_once(
     }
     let step_start = Instant::now();
     remove_orphan_headings(&main);
-    record_profile(&mut profile, "postMainCleanup", step_start);
+    record_profile(&mut profile, "standardizeContent", step_start);
 
-    let step_start = Instant::now();
     if let Some(best_cover_url) = remove_cover_image_duplicate(&main, &metadata.image) {
         metadata.image = best_cover_url;
     }
-    record_profile(&mut profile, "removeCoverImage", step_start);
 
     let step_start = Instant::now();
     let fallback = data_attribute_content_fallback(data_attribute_body_html)
@@ -1151,7 +1172,7 @@ fn parse_html_to_org_once(
             (html, org, words)
         }
     };
-    record_profile(&mut profile, "renderOrg", step_start);
+    record_profile(&mut profile, "standardizeContent", step_start);
     if let Some(lede) = visible_description_lede(&document, &main, &metadata.description, &body_org)
     {
         let step_start = Instant::now();
@@ -1163,11 +1184,11 @@ fn parse_html_to_org_once(
             body_org = format!("{}\n\n{}", lede_org.trim(), body_org.trim_start());
             word_count += count_words(&lede.text_contents());
         }
-        record_profile(&mut profile, "visibleDescriptionLede", step_start);
+        record_profile(&mut profile, "standardizeContent", step_start);
     }
     let step_start = Instant::now();
     let org = build_org_document(&metadata, &body_org, word_count);
-    record_profile(&mut profile, "buildOrgDocument", step_start);
+    record_profile(&mut profile, "standardizeContent", step_start);
     let extractor_type = if steam_event.is_some() {
         extractor_type("bbcodedata")
     } else if wikipedia_document {
@@ -1218,21 +1239,8 @@ fn parse_html_to_org_once(
     })
 }
 
-fn attach_parse_diagnostics(
-    output: &mut DefuddleOutput,
-    options: &DefuddleOptions,
-    parse_start: Instant,
-) {
+fn attach_parse_diagnostics(output: &mut DefuddleOutput, parse_start: Instant) {
     output.parse_time = elapsed_ms(parse_start);
-    if options.profile {
-        output
-            .profile
-            .get_or_insert_with(HashMap::new)
-            .insert("total".to_string(), output.parse_time);
-    }
-    if options.debug && output.debug.is_none() {
-        output.debug = Some(DebugInfo::default());
-    }
 }
 
 fn attach_frontmatter(output: &mut DefuddleOutput, source_url: Option<&str>, enabled: bool) {
@@ -1348,8 +1356,16 @@ fn is_frontmatter_cjk(ch: char) -> bool {
 }
 
 fn record_profile(profile: &mut Option<HashMap<String, u64>>, step: &str, start: Instant) {
+    record_profile_elapsed(profile, step, start.elapsed());
+}
+
+fn record_profile_elapsed(
+    profile: &mut Option<HashMap<String, u64>>,
+    step: &str,
+    elapsed: Duration,
+) {
     if let Some(profile) = profile.as_mut() {
-        let elapsed = elapsed_ms(start);
+        let elapsed = duration_ms(elapsed);
         profile
             .entry(step.to_string())
             .and_modify(|value| *value = value.saturating_add(elapsed))
@@ -1357,8 +1373,21 @@ fn record_profile(profile: &mut Option<HashMap<String, u64>>, step: &str, start:
     }
 }
 
+fn upstream_profile(enabled: bool) -> Option<HashMap<String, u64>> {
+    enabled.then(|| {
+        UPSTREAM_PROFILE_STEPS
+            .iter()
+            .map(|step| ((*step).to_string(), 0))
+            .collect()
+    })
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
 fn elapsed_ms(start: Instant) -> u64 {
-    start.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
+    duration_ms(start.elapsed())
 }
 
 fn extractor_type(name: &str) -> Option<String> {
@@ -24465,10 +24494,9 @@ mod tests {
         assert!(!output.org.contains("Article cover"));
         assert!(!output.html.contains("<img"));
         assert!(output.org.contains("The article body remains"));
-        assert!(output
-            .profile
-            .expect("profile should be present")
-            .contains_key("removeCoverImage"));
+        let profile = output.profile.expect("profile should be present");
+        assert!(profile.contains_key("standardizeContent"));
+        assert!(!profile.contains_key("removeCoverImage"));
     }
 
     #[test]
@@ -27967,8 +27995,8 @@ Output: [0,1]</code></pre>
                 remove_content_patterns: true,
                 remove_low_scoring: true,
                 standardize: true,
-                debug: false,
-                profile: false,
+                debug: true,
+                profile: true,
                 frontmatter: false,
                 markdown: false,
                 separate_markdown: false,
@@ -27990,6 +28018,8 @@ Output: [0,1]</code></pre>
         assert!(output.org.contains("[fn:1] [[https://www.epa.gov/indoor-air-quality-iaq/guide-air-cleaners-home?utm_source=chatgpt.com][epa.gov]]"));
         assert!(!output.org.contains("Thought for 12s"));
         assert!(!output.org.contains("US EPA"));
+        assert!(output.debug.is_none());
+        assert!(output.profile.is_none());
     }
 
     #[test]
@@ -31161,11 +31191,15 @@ Output: [0,1]</code></pre>
         }));
 
         let profile = output.profile.expect("profile should be present");
-        assert!(profile.contains_key("removeBySelector"));
-        assert!(!profile.contains_key("removeExactSelectors"));
-        assert!(!profile.contains_key("removePartialSelectors"));
-        assert!(profile.contains_key("findMainContent"));
-        assert!(profile.contains_key("total"));
+        let actual_steps = profile.keys().map(String::as_str).collect::<HashSet<_>>();
+        let expected_steps = UPSTREAM_PROFILE_STEPS
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        assert_eq!(actual_steps, expected_steps);
+        assert!(profile
+            .values()
+            .all(|duration| *duration <= output.parse_time));
     }
 
     #[test]
@@ -31613,7 +31647,7 @@ line break text.">
                 content_selector: "html > body > article".to_string(),
                 removals: Vec::new(),
             }),
-            profile: Some(HashMap::from([("total".to_string(), 7)])),
+            profile: Some(HashMap::from([("cloneDocument".to_string(), 7)])),
         };
 
         assert_eq!(

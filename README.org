@@ -301,8 +301,12 @@ Known remaining gaps:
   ~removeBySelector~ selector cleanup,
   upstream-style ~scoreAndRemove~ low-scoring cleanup, and upstream-style
   ~removeByContentPattern~ cleanup. Coverage is still narrower than upstream's
-  full debug removals. Debug JSON uses upstream ~contentSelector~ naming and
-  retains ~content_selector~ as an org-defuddle compatibility alias.
+  full debug removals. Profile JSON uses the 16 upstream generic-pipeline stage
+  names; stages that require a live browser shadow tree or computed mobile
+  styles are present with zero time because serialized HTML cannot carry that
+  state. Site-specific extractor responses omit debug/profile data as upstream
+  does. Debug JSON uses upstream ~contentSelector~ naming and retains
+  ~content_selector~ as an org-defuddle compatibility alias.
 
 Implemented:
 
@@ -366,7 +370,9 @@ Implemented:
 - Debug and profiling diagnostics through ~debug~- and ~profile~-style options
   across the Rust core, dynamic module, and Elisp JSON wrapper, including
   selected removal records from hidden-element, selector, upstream-style
-  ~scoreAndRemove~ low-scoring, and ~removeByContentPattern~ cleanup.
+  ~scoreAndRemove~ low-scoring, and ~removeByContentPattern~ cleanup. Generic
+  extraction profiles expose the upstream top-level stage names without
+  Rust-only public timing keys.
 - YAML frontmatter generation through a ~frontmatter~-style option across the
   Rust core, dynamic module, and Elisp wrappers.
 - Compatibility Markdown generation through ~markdown~- and

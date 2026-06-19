@@ -629,10 +629,11 @@ Implemented:
   newsletter prompts, SVG icons, and common sidebars. It also covers selected
   case-insensitive attribute-selector equivalents and guarded header cleanup for
   Rust selectors that cannot express upstream browser-only ~:has()~ guards,
-  while preserving guarded math scripts, source-backed audio/video, gradient ad
-  content, and callout asides. Partial selector cleanup follows upstream-style
-  heading preservation and id guards for delimiter-less content anchors and
-  delimited UI ids.
+  plus UI/form-oriented ~label~ cleanup that preserves flowing prose labels and
+  footnote/sidenote labels. It preserves guarded math scripts, source-backed
+  audio/video, gradient ad content, and callout asides. Partial selector
+  cleanup follows upstream-style heading preservation and id guards for
+  delimiter-less content anchors and delimited UI ids.
   Button cleanup preserves inline text and extracts media from media-wrapping
   buttons before removing UI controls. Debug/profile records from this pass use
   the upstream ~removeBySelector~ step name.
@@ -697,8 +698,9 @@ Implemented:
 Remaining parity work:
 
 - Finish the remaining selector parity gaps that need conditional Rust
-  equivalents for remaining browser-only selectors and high-risk broad selectors
-  such as bare ~label~, plus the remaining content-pattern removals.
+  equivalents for remaining browser-only selectors and high-risk broad
+  selectors beyond the implemented UI-label subset, plus the remaining
+  content-pattern removals.
 - Continue expanding low-scoring block-pruning heuristics to match the full
   upstream scorer.
 - Expand image/media support to the full upstream fixture set, including

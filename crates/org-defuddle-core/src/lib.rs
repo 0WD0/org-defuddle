@@ -12187,6 +12187,18 @@ fn conditional_exact_noise_selector(node: &NodeRef) -> Option<&'static str> {
             "input[type=\"checkbox\"][class/id*=\"sidebar|drawer|hamburger|toggle|trigger\" i]",
         );
     }
+    if tag == "label"
+        && is_removable_ui_label_node(
+            node,
+            class,
+            id,
+            attrs.get("for").unwrap_or_default(),
+            attrs.get("role").unwrap_or_default(),
+            attrs.get("aria-label").unwrap_or_default(),
+        )
+    {
+        return Some("label");
+    }
     if attr_eq_ci(attrs.get("data-print-layout").unwrap_or_default(), "hide") {
         return Some("[data-print-layout=\"hide\" i]");
     }
@@ -12271,6 +12283,106 @@ fn checkbox_ui_toggle_attr(class: &str, id: &str) -> bool {
     ["sidebar", "drawer", "hamburger", "toggle", "trigger"]
         .into_iter()
         .any(|needle| attr_contains_ci(class, needle) || attr_contains_ci(id, needle))
+}
+
+fn is_removable_ui_label_node(
+    node: &NodeRef,
+    class: &str,
+    id: &str,
+    for_attr: &str,
+    role: &str,
+    aria_label: &str,
+) -> bool {
+    if is_preserved_label_node(node, class, id, for_attr) {
+        return false;
+    }
+    if count_selector(
+        node,
+        "p, pre, code, table, blockquote, figure, img, picture, video, audio, math",
+    ) > 0
+    {
+        return false;
+    }
+    if count_selector(node, "input, select, textarea, button") > 0 {
+        return true;
+    }
+
+    let attrs = [class, id, for_attr, role, aria_label].join(" ");
+    if [
+        "sidebar",
+        "drawer",
+        "hamburger",
+        "toggle",
+        "trigger",
+        "menu",
+        "nav",
+        "modal",
+        "dialog",
+        "search",
+        "filter",
+        "sort",
+        "share",
+        "subscribe",
+        "newsletter",
+        "theme",
+        "close",
+        "dismiss",
+    ]
+    .into_iter()
+    .any(|needle| attr_contains_ci(&attrs, needle))
+    {
+        return true;
+    }
+
+    let text = cleanup_inline(&node.text_contents());
+    if !for_attr.trim().is_empty() {
+        return count_words(&text) <= 6;
+    }
+
+    static UI_LABEL_TEXT_RE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r"(?i)^(menu|open menu|close|dismiss|search|filter|sort|share|subscribe|newsletter|toggle|theme|dark mode|light mode|sidebar|navigation|contents?)$",
+        )
+        .unwrap()
+    });
+    count_words(&text) <= 3 && UI_LABEL_TEXT_RE.is_match(text.trim())
+}
+
+fn is_preserved_label_node(node: &NodeRef, class: &str, id: &str, for_attr: &str) -> bool {
+    let attrs = [class, id, for_attr].join(" ").to_ascii_lowercase();
+    if attrs.contains("footnote")
+        || attrs.contains("footref")
+        || attrs.contains("sidenote")
+        || attrs.contains("margin-toggle")
+        || attrs.contains("margin-toggle-footnote")
+    {
+        return true;
+    }
+    if looks_like_label_footnote_target(for_attr) {
+        return true;
+    }
+    has_ancestor_matching(node, is_footnote_container_node)
+}
+
+fn looks_like_label_footnote_target(value: &str) -> bool {
+    let value = value.trim_start_matches('#').to_ascii_lowercase();
+    value.starts_with("fn:")
+        || value.starts_with("fn-")
+        || value
+            .strip_prefix("fn")
+            .is_some_and(looks_like_numeric_footnote_suffix)
+        || value.starts_with("footnote-")
+        || value.starts_with("easy-footnote-bottom-")
+        || value.starts_with("cite_note-")
+        || value.starts_with("cite_ref-")
+        || value.starts_with("_ftn")
+        || value.starts_with("ftnt")
+        || value
+            .strip_prefix("ref")
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()))
+        || value
+            .strip_prefix("footnote_")
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()))
 }
 
 fn class_token_eq_ci(class: &str, token: &str) -> bool {
@@ -28016,6 +28128,87 @@ Output: [0,1]</code></pre>
             assert!(!output.org.contains(marker), "{marker}\n{}", output.org);
         }
         assert!(!output.html.contains("SidebarToggle"), "{}", output.html);
+    }
+
+    #[test]
+    fn conditional_exact_selector_cleanup_removes_ui_labels_conservatively() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head><title>Label Cleanup</title></head>
+          <body>
+            <article class="post-content">
+              <h1>Label Cleanup</h1>
+              <label for="sidebar-toggle" class="SidebarLabel">Sidebar label marker</label>
+              <input type="checkbox" id="sidebar-toggle" checked>
+              <label class="menu-toggle">Menu label marker</label>
+              <label><input type="checkbox" checked> Preference label marker</label>
+              <p>The visible paragraph keeps extraction stable after UI labels are removed.</p>
+              <p>The article preserves <label class="term-label">semantic label marker</label> in flowing prose.</p>
+              <p>The concluding paragraph keeps the article substantial and readable.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/label-cleanup".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                remove_content_patterns: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("visible paragraph keeps extraction"));
+        assert!(output.org.contains("semantic label marker"));
+        for marker in [
+            "Sidebar label marker",
+            "Menu label marker",
+            "Preference label marker",
+        ] {
+            assert!(!output.org.contains(marker), "{marker}\n{}", output.org);
+        }
+    }
+
+    #[test]
+    fn conditional_exact_selector_cleanup_preserves_footnote_labels() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head><title>Label Footnotes</title></head>
+          <body>
+            <article class="post-content">
+              <h1>Label Footnotes</h1>
+              <p>The visible paragraph cites a sidenote-style label<label class="footref" for="fn1">1</label> in flowing prose.</p>
+              <p>The concluding paragraph keeps the article substantial and readable.</p>
+              <ol class="footnotes">
+                <li id="fn1"><p>Footnote label reference stays available.</p></li>
+              </ol>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/label-footnotes".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                remove_content_patterns: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("sidenote-style label [fn:1]"));
+        assert!(output
+            .org
+            .contains("[fn:1] Footnote label reference stays available."));
     }
 
     #[test]

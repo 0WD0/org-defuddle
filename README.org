@@ -418,12 +418,12 @@ Implemented:
   original document head, plus ~extractorType~ and upstream-compatible extractor
   ~variables~ for selected site metadata on C2 Wiki, GitHub, Hacker News,
   Medium, Discourse, New York Times, LWN, LeetCode, LinkedIn, Substack,
-  X/Twitter, Reddit, Mastodon, Bluesky, and Threads, plus non-standard custom
-  fields such as transcript, conversation ~wordCount~, or selected video-part
-  metadata when a site-specific extractor produces them. Wikipedia
-  content-selector extraction and Steam event BBCode extraction also report
-  their upstream extractor identities and variables; Steam event bodies take
-  precedence over page-shell content.
+  X/Twitter, Reddit, Mastodon, Bluesky, Threads, YouTube, and Bilibili, plus
+  non-standard custom fields such as transcript, conversation ~wordCount~, or
+  selected video-part metadata when a site-specific extractor produces them.
+  Wikipedia content-selector extraction and Steam event BBCode extraction also
+  report their upstream extractor identities and variables; Steam event bodies
+  take precedence over page-shell content.
 - Property-style response selection for upstream names such as ~title~,
   ~domain~, ~wordCount~, ~parseTime~, and ~contentMarkdown~, with snake-case
   aliases for org-defuddle JSON fields.

@@ -1695,6 +1695,25 @@ fn conversation_variables(
     ])
 }
 
+fn video_variables(
+    metadata: &Metadata,
+    transcript: Option<&str>,
+    transcript_language: Option<&str>,
+    part: Option<&str>,
+) -> Option<HashMap<String, String>> {
+    extractor_variables([
+        ("title", Some(metadata.title.clone())),
+        ("author", Some(metadata.author.clone())),
+        ("site", Some(metadata.site.clone())),
+        ("image", Some(metadata.image.clone())),
+        ("published", Some(metadata.published.clone())),
+        ("description", Some(metadata.description.clone())),
+        ("transcript", transcript.map(str::to_owned)),
+        ("language", transcript_language.map(str::to_owned)),
+        ("part", part.map(str::to_owned)),
+    ])
+}
+
 pub fn parse_c2_wiki_json_to_org(
     json: &str,
     provided_url: Option<&str>,
@@ -3670,6 +3689,16 @@ fn youtube_output(
     let word_count = count_words(&body);
     let html = serialize_node(document)?;
     let org = build_org_document(&metadata, &body, word_count);
+    let variables = video_variables(
+        &metadata,
+        transcript
+            .as_ref()
+            .map(|transcript| transcript.text.as_str()),
+        transcript
+            .as_ref()
+            .and_then(|transcript| transcript.language_code.as_deref()),
+        None,
+    );
 
     Ok(Some(DefuddleOutput {
         title: metadata.title,
@@ -3689,12 +3718,7 @@ fn youtube_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("youtube"),
-        variables: extractor_variables([(
-            "transcript",
-            transcript
-                .as_ref()
-                .map(|transcript| transcript.text.clone()),
-        )]),
+        variables,
         debug: None,
         profile: None,
     }))
@@ -3775,6 +3799,16 @@ fn youtube_api_output(
     let body_org = body_parts.join("\n\n");
     let word_count = count_words(&body_org);
     let org = build_org_document(&metadata, &body_org, word_count);
+    let variables = video_variables(
+        &metadata,
+        transcript
+            .as_ref()
+            .map(|transcript| transcript.text.as_str()),
+        transcript
+            .as_ref()
+            .and_then(|transcript| transcript.language_code.as_deref()),
+        None,
+    );
 
     let mut body_html = String::new();
     if !video_id.is_empty() {
@@ -3814,12 +3848,7 @@ fn youtube_api_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("youtube"),
-        variables: extractor_variables([(
-            "transcript",
-            transcript
-                .as_ref()
-                .map(|transcript| transcript.text.clone()),
-        )]),
+        variables,
         debug: None,
         profile: None,
     })
@@ -5291,6 +5320,17 @@ fn bilibili_output(
         ..Metadata::default()
     };
     let org = build_org_document(&metadata, &body_org, word_count);
+    let transcript_language = transcript
+        .as_ref()
+        .and_then(|_| (!metadata.language.is_empty()).then_some(metadata.language.as_str()));
+    let variables = video_variables(
+        &metadata,
+        transcript
+            .as_ref()
+            .map(|transcript| transcript.text.as_str()),
+        transcript_language,
+        Some(info.part.as_str()),
+    );
 
     Ok(DefuddleOutput {
         title: metadata.title,
@@ -5310,15 +5350,7 @@ fn bilibili_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("bilibili"),
-        variables: extractor_variables([
-            ("part", Some(info.part.clone())),
-            (
-                "transcript",
-                transcript
-                    .as_ref()
-                    .map(|transcript| transcript.text.clone()),
-            ),
-        ]),
+        variables,
         debug: None,
         profile: None,
     })
@@ -26141,6 +26173,19 @@ mod tests {
         assert_eq!(output.published, "2023-11-14T22:13:20.000Z");
         assert_eq!(output.language, "zh-cn");
         assert_eq!(output.extractor_type.as_deref(), Some("bilibili"));
+        assert_eq!(variable(&output, "title"), Some("Test Video"));
+        assert_eq!(variable(&output, "author"), Some("TestAuthor"));
+        assert_eq!(variable(&output, "site"), Some("Bilibili"));
+        assert_eq!(
+            variable(&output, "image"),
+            Some("https://i0.hdslb.com/cover.jpg")
+        );
+        assert_eq!(
+            variable(&output, "published"),
+            Some("2023-11-14T22:13:20.000Z")
+        );
+        assert_eq!(variable(&output, "description"), Some("Line one\nLine two"));
+        assert_eq!(variable(&output, "language"), Some("zh-cn"));
         assert_eq!(
             output
                 .variables
@@ -28728,6 +28773,19 @@ mod tests {
         assert_eq!(output.published, "2026-01-02");
         assert_eq!(output.language, "en");
         assert_eq!(output.extractor_type.as_deref(), Some("youtube"));
+        assert_eq!(variable(&output, "title"), Some("Rust Parsing Demo"));
+        assert_eq!(variable(&output, "author"), Some("DOM Channel"));
+        assert_eq!(variable(&output, "site"), Some("YouTube"));
+        assert_eq!(
+            variable(&output, "image"),
+            Some("https://img.youtube.com/vi/dQw4w9WgXcQ/maxresdefault.jpg")
+        );
+        assert_eq!(variable(&output, "published"), Some("2026-01-02"));
+        assert_eq!(
+            variable(&output, "description"),
+            Some("First line of the video description. Second line with details.")
+        );
+        assert_eq!(variable(&output, "language"), Some("en"));
         assert!(output
             .variables
             .as_ref()
@@ -28815,7 +28873,7 @@ mod tests {
     fn youtube_extractor_supports_short_and_youtu_be_urls_without_transcript() {
         let html = r##"
         <!doctype html>
-        <html>
+        <html lang="fr">
           <head>
             <meta property="og:site_name" content="YouTube">
             <meta property="og:title" content="Short Video">
@@ -28850,6 +28908,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(output.title, "Short Video");
+        assert_eq!(output.language, "fr");
+        assert_eq!(variable(&output, "title"), Some("Short Video"));
+        assert_eq!(variable(&output, "site"), Some("YouTube"));
+        assert_eq!(variable(&output, "description"), Some("Short description"));
+        assert_eq!(variable(&output, "transcript"), None);
+        assert_eq!(variable(&output, "language"), None);
         assert!(output
             .org
             .contains("[[https://www.youtube.com/watch?v=abc123XYZ90]]"));
@@ -29031,6 +29095,19 @@ mod tests {
         assert_eq!(output.published, "2026-05-02");
         assert_eq!(output.language, "en");
         assert_eq!(output.extractor_type.as_deref(), Some("youtube"));
+        assert_eq!(variable(&output, "title"), Some("API Transcript Demo"));
+        assert_eq!(variable(&output, "author"), Some("API Channel"));
+        assert_eq!(variable(&output, "site"), Some("YouTube"));
+        assert_eq!(
+            variable(&output, "image"),
+            Some("https://i.ytimg.com/vi/api123/default.jpg")
+        );
+        assert_eq!(variable(&output, "published"), Some("2026-05-02"));
+        assert_eq!(
+            variable(&output, "description"),
+            Some("First description line.\nSecond description line.")
+        );
+        assert_eq!(variable(&output, "language"), Some("en"));
         assert!(output
             .variables
             .as_ref()

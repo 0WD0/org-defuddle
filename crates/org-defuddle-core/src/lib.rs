@@ -20492,7 +20492,11 @@ impl MarkdownRenderer {
 
     fn render_image(&mut self, element: &ElementData) {
         let attrs = element.attributes.borrow();
-        let src = attrs.get("src").or_else(|| attrs.get("data-src"));
+        let src = attrs
+            .get("srcset")
+            .and_then(best_srcset_url)
+            .or_else(|| attrs.get("src").map(str::to_string))
+            .or_else(|| attrs.get("data-src").map(str::to_string));
         let alt = attrs.get("alt").unwrap_or("");
         let title = attrs.get("title");
         if let Some(src) = src.filter(|src| !src.trim().is_empty() && !is_dangerous_url(src)) {
@@ -33316,6 +33320,29 @@ line break text.">
             r#"<article><p>Hello world</p><img src="https://example.com/img.png" alt="photo"></article>"#,
         );
         assert!(normal_image.contains("![photo](https://example.com/img.png)"));
+
+        let srcset_image = html_fragment_to_markdown(
+            r#"<article>
+              <img
+                src="https://cdn.example.com/small.jpg"
+                srcset="https://cdn.example.com/small.jpg 640w, https://cdn.example.com/large.jpg 1600w"
+                alt="Srcset photo">
+            </article>"#,
+        );
+        assert!(srcset_image.contains("![Srcset photo](https://cdn.example.com/large.jpg)"));
+        assert!(!srcset_image.contains("https://cdn.example.com/small.jpg)"));
+
+        let comma_srcset_image = html_fragment_to_markdown(
+            r#"<article>
+              <img
+                src="https://cdn.example.com/fetch/token,w_320,c_limit/photo.jpg"
+                srcset="https://cdn.example.com/fetch/token,w_640,c_limit/photo.jpg 640w, https://cdn.example.com/fetch/token,w_1600,c_limit/photo.jpg 1600w"
+                alt="Comma srcset photo">
+            </article>"#,
+        );
+        assert!(comma_srcset_image.contains(
+            "![Comma srcset photo](https://cdn.example.com/fetch/token,w_1600,c_limit/photo.jpg)"
+        ));
 
         let exclamation_not_before_image =
             html_fragment_to_markdown(r#"<article><p>Hello! This is great!</p></article>"#);

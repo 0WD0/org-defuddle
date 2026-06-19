@@ -756,10 +756,10 @@ Remaining parity work:
 - Expand image/media support to the full upstream fixture set, including
   richer platform video/embed handling and remaining site-specific
   image/figure elements.
-- Expand footnote and callout support to the full upstream fixture set, and
-  expand MathML-to-LaTeX conversion and MathJax CHTML reconstruction, remaining
-  codeblock layouts, broader multi-column layout table handling, richer table
-  rendering, and SVG handling.
+- Continue auditing footnote, callout, and math behavior on pages outside the
+  inspected fixture set, and expand MathML-to-LaTeX conversion and MathJax CHTML
+  reconstruction, remaining codeblock layouts, broader multi-column layout
+  table handling, richer table rendering, and SVG handling.
 - Expand schema.org text fallback coverage and port site-specific extractors,
   including richer per-extractor ~variables~ parity for custom fields.
 - Continue deepening fixture-specific Org assertions and add exact-output

@@ -4018,17 +4018,25 @@ fn youtube_clean_title(title: &str) -> String {
 }
 
 fn youtube_schema_string(schema: &[Value], video_id: &str, paths: &[&str]) -> Option<String> {
+    let mut fallback = None;
     for value in schema {
         for item in youtube_schema_items(value) {
             if !youtube_schema_item_matches_video(&item, video_id) {
                 continue;
             }
-            if let Some(found) = schema_string(&[item], paths) {
-                return Some(found);
+            let has_description =
+                schema_string(std::slice::from_ref(&item), &["description"]).is_some();
+            if let Some(found) = schema_string(std::slice::from_ref(&item), paths) {
+                if fallback.is_none() {
+                    fallback = Some(found.clone());
+                }
+                if has_description {
+                    return Some(found);
+                }
             }
         }
     }
-    None
+    fallback
 }
 
 fn youtube_schema_items(value: &Value) -> Vec<Value> {
@@ -27862,6 +27870,63 @@ mod tests {
         assert!(output
             .org
             .contains("*0:31* · Now the second chapter begins."));
+    }
+
+    #[test]
+    fn youtube_schema_prefers_video_object_with_description() {
+        let html = r##"
+        <!doctype html>
+        <html>
+          <head>
+            <script type="application/ld+json">
+              {
+                "@context": "https://schema.org",
+                "@type": "VideoObject",
+                "@id": "https://www.youtube.com/watch?v=abcdEFGH123",
+                "name": "Comment-derived title",
+                "thumbnailUrl": "https://i.ytimg.com/vi/abcdEFGH123/comment.jpg",
+                "uploadDate": "2024-05-26T08:08:22-07:00",
+                "author": "Comment Author",
+                "comment": [{"@type": "https://schema.org/Comment", "text": "Nice video"}]
+              }
+            </script>
+            <script type="application/ld+json">
+              {
+                "@context": "https://schema.org",
+                "@type": "VideoObject",
+                "@id": "https://www.youtube.com/watch?v=abcdEFGH123",
+                "name": "Real video title",
+                "description": "The real description that should appear in the content.",
+                "thumbnailUrl": "https://i.ytimg.com/vi/abcdEFGH123/maxresdefault.jpg",
+                "uploadDate": "2024-06-02T01:01:18-07:00",
+                "author": "Channel Author"
+              }
+            </script>
+          </head>
+          <body></body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://www.youtube.com/watch?v=abcdEFGH123".to_string()),
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output.title, "Real video title");
+        assert_eq!(output.author, "Channel Author");
+        assert_eq!(output.published, "2024-06-02T01:01:18-07:00");
+        assert_eq!(
+            output.image,
+            "https://i.ytimg.com/vi/abcdEFGH123/maxresdefault.jpg"
+        );
+        assert!(output
+            .org
+            .contains("The real description that should appear in the content."));
+        assert!(!output.org.contains("Comment-derived title"));
     }
 
     #[test]

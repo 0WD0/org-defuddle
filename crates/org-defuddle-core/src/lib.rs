@@ -1669,6 +1669,20 @@ where
     (!variables.is_empty()).then_some(variables)
 }
 
+fn metadata_variables(metadata: &Metadata, keys: &[&str]) -> Option<HashMap<String, String>> {
+    extractor_variables(keys.iter().filter_map(|key| {
+        let value = match *key {
+            "title" => metadata.title.clone(),
+            "author" => metadata.author.clone(),
+            "published" => metadata.published.clone(),
+            "site" => metadata.site.clone(),
+            "description" => metadata.description.clone(),
+            _ => return None,
+        };
+        Some((*key, Some(value)))
+    }))
+}
+
 pub fn parse_c2_wiki_json_to_org(
     json: &str,
     provided_url: Option<&str>,
@@ -1708,6 +1722,7 @@ pub fn parse_c2_wiki_json_to_org(
         ..Metadata::default()
     };
     let org = build_org_document(&metadata, &body_org, word_count);
+    let variables = metadata_variables(&metadata, &["title", "site", "published"]);
 
     Ok(DefuddleOutput {
         title: metadata.title,
@@ -1727,7 +1742,7 @@ pub fn parse_c2_wiki_json_to_org(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("c2wiki"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     })
@@ -2706,6 +2721,11 @@ fn hn_output(
         metadata.domain.clone()
     };
 
+    let variables = metadata_variables(
+        &metadata,
+        &["title", "author", "site", "description", "published"],
+    );
+
     Ok(DefuddleOutput {
         title: metadata.title,
         description: metadata.description,
@@ -2724,7 +2744,7 @@ fn hn_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("hackernews"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     })
@@ -2771,6 +2791,10 @@ fn github_output(
     let word_count = count_words(&body_org);
     let html = github_body_html(kind, &primary_body, document, include_replies)?;
     let org = build_org_document(&metadata, &body_org, word_count);
+    let variables = metadata_variables(
+        &metadata,
+        &["title", "author", "published", "site", "description"],
+    );
 
     Ok(Some(DefuddleOutput {
         title: metadata.title,
@@ -2790,7 +2814,7 @@ fn github_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("github"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -5922,6 +5946,7 @@ fn medium_output(
     let word_count = count_words(&body_org);
     let html = serialize_node(&article)?;
     let org = build_org_document(&metadata, &body_org, word_count);
+    let variables = metadata_variables(&metadata, &["title", "author", "site", "description"]);
 
     Ok(Some(DefuddleOutput {
         title: metadata.title,
@@ -5941,7 +5966,7 @@ fn medium_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("medium"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -6266,6 +6291,10 @@ fn discourse_output(
         .map(serialize_node)
         .unwrap_or_else(|| serialize_node(&posts[0]))?;
     let org = build_org_document(&metadata, &body, word_count);
+    let variables = metadata_variables(
+        &metadata,
+        &["title", "author", "site", "description", "published"],
+    );
 
     Ok(Some(DefuddleOutput {
         title: metadata.title,
@@ -6285,7 +6314,7 @@ fn discourse_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("discourse"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -6519,6 +6548,8 @@ fn nytimes_output(
     let html = serialize_node(&article)?;
     let org = build_org_document(&metadata, &body_org, word_count);
 
+    let variables = metadata_variables(&metadata, &["title", "author", "published", "description"]);
+
     Ok(Some(DefuddleOutput {
         title: metadata.title,
         description: metadata.description,
@@ -6537,7 +6568,7 @@ fn nytimes_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("nytimes"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -6954,6 +6985,10 @@ fn lwn_output(
     let word_count = count_words(&body);
     let html = serialize_node(&main)?;
     let org = build_org_document(&metadata, &body, word_count);
+    let variables = metadata_variables(
+        &metadata,
+        &["title", "author", "site", "published", "description"],
+    );
     Ok(Some(DefuddleOutput {
         title: metadata.title,
         description: metadata.description,
@@ -6972,7 +7007,7 @@ fn lwn_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("lwn"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -7235,6 +7270,7 @@ fn leetcode_output(
     let word_count = count_words(&body_org);
     let html = serialize_node(&description)?;
     let org = build_org_document(&metadata, &body_org, word_count);
+    let variables = metadata_variables(&metadata, &["title", "site"]);
 
     Ok(Some(DefuddleOutput {
         title: metadata.title,
@@ -7254,7 +7290,7 @@ fn leetcode_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("leetcode"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -25421,6 +25457,10 @@ fn escape_html_text(text: &str) -> String {
 mod tests {
     use super::*;
 
+    fn variable<'a>(output: &'a DefuddleOutput, key: &str) -> Option<&'a str> {
+        output.variables.as_ref()?.get(key).map(String::as_str)
+    }
+
     #[test]
     fn c2_wiki_json_renders_markup_and_metadata() {
         let json = serde_json::json!({
@@ -25437,6 +25477,9 @@ mod tests {
         assert_eq!(output.published, "2026-06-01");
         assert_eq!(output.url, "https://wiki.c2.com/?RecentChanges");
         assert_eq!(output.domain, "wiki.c2.com");
+        assert_eq!(variable(&output, "title"), Some("Recent Changes"));
+        assert_eq!(variable(&output, "site"), Some("C2 Wiki"));
+        assert_eq!(variable(&output, "published"), Some("2026-06-01"));
         assert!(output.html.contains("<strong>visitor</strong>"));
         assert!(output.html.contains("<em>reader</em>"));
         assert!(output
@@ -25466,8 +25509,169 @@ mod tests {
         .unwrap();
 
         assert_eq!(output.title, "Welcome Visitors");
+        assert_eq!(variable(&output, "title"), Some("Welcome Visitors"));
+        assert_eq!(variable(&output, "site"), Some("C2 Wiki"));
+        assert_eq!(variable(&output, "published"), None);
         assert!(output.org.contains("* Welcome Visitors"));
         assert!(output.org.contains("Start here."));
+    }
+
+    #[test]
+    fn hackernews_extractor_exposes_upstream_variables() {
+        let html = r##"
+        <!doctype html>
+        <html>
+          <head><title>Rust extractor lands | Hacker News</title></head>
+          <body>
+            <center>
+              <table id="hnmain">
+                <tr><td>
+                  <table class="fatitem">
+                    <tr class="athing" id="123">
+                      <td class="title">
+                        <span class="titleline"><a href="https://example.com/story">Rust extractor lands</a></span>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td class="subtext">
+                        <span class="score">42 points</span>
+                        <a class="hnuser">ada</a>
+                        <span class="age" title="2026-06-01T12:34:56"></span>
+                      </td>
+                    </tr>
+                  </table>
+                  <table class="comment-tree">
+                    <tr class="comtr">
+                      <td class="ind"><img width="0"></td>
+                      <td>
+                        <div class="comhead">
+                          <a class="hnuser">grace</a>
+                          <span class="age" title="2026-06-02T01:02:03"><a href="item?id=456">1 day ago</a></span>
+                          <span class="score">5 points</span>
+                        </div>
+                        <div class="commtext"><p>Comment body for the extraction test.</p></div>
+                      </td>
+                    </tr>
+                  </table>
+                </td></tr>
+              </table>
+            </center>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://news.ycombinator.com/item?id=123".to_string()),
+                include_images: true,
+                remove_small_images: true,
+                content_selector: None,
+                include_replies: IncludeReplies::Extractors,
+                remove_hidden_elements: true,
+                remove_exact_selectors: true,
+                remove_partial_selectors: true,
+                remove_content_patterns: true,
+                remove_low_scoring: true,
+                standardize: true,
+                debug: false,
+                profile: false,
+                frontmatter: false,
+                markdown: false,
+                separate_markdown: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output.extractor_type.as_deref(), Some("hackernews"));
+        assert_eq!(output.title, "Rust extractor lands");
+        assert_eq!(output.author, "ada");
+        assert_eq!(output.site, "Hacker News");
+        assert_eq!(output.published, "2026-06-01");
+        assert_eq!(variable(&output, "title"), Some("Rust extractor lands"));
+        assert_eq!(variable(&output, "author"), Some("ada"));
+        assert_eq!(variable(&output, "site"), Some("Hacker News"));
+        assert_eq!(variable(&output, "published"), Some("2026-06-01"));
+        assert_eq!(variable(&output, "description"), None);
+        assert!(output
+            .org
+            .contains("[[https://example.com/story][https://example.com/story]]"));
+        assert!(output.org.contains("Comment body for the extraction test."));
+    }
+
+    #[test]
+    fn github_issue_extractor_exposes_upstream_variables() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <title>Parser parity issue · Issue #42 · owner/repo</title>
+            <meta name="description" content="Track GitHub issue extraction parity.">
+            <link rel="icon" href="/favicon.ico">
+          </head>
+          <body>
+            <div data-testid="issue-metadata-sticky">metadata chrome</div>
+            <div data-testid="issue-viewer-issue-container">
+              <a data-testid="issue-body-header-author">ada</a>
+              <a data-testid="issue-body-header-link" href="/owner/repo/issues/42">
+                <relative-time datetime="2026-06-03T04:05:06Z"></relative-time>
+              </a>
+              <div data-testid="issue-body-viewer">
+                <div data-testid="markdown-body">
+                  <div class="markdown-body">
+                    <p>The issue body describes the extractor variable parity work.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://github.com/owner/repo/issues/42".to_string()),
+                include_images: true,
+                remove_small_images: true,
+                content_selector: None,
+                include_replies: IncludeReplies::Extractors,
+                remove_hidden_elements: true,
+                remove_exact_selectors: true,
+                remove_partial_selectors: true,
+                remove_content_patterns: true,
+                remove_low_scoring: true,
+                standardize: true,
+                debug: false,
+                profile: false,
+                frontmatter: false,
+                markdown: false,
+                separate_markdown: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output.extractor_type.as_deref(), Some("github"));
+        assert_eq!(output.title, "Parser parity issue · Issue #42");
+        assert_eq!(output.author, "ada");
+        assert_eq!(output.site, "GitHub");
+        assert_eq!(output.published, "2026-06-03T04:05:06Z");
+        assert_eq!(output.description, "Track GitHub issue extraction parity.");
+        assert_eq!(
+            variable(&output, "title"),
+            Some("Parser parity issue · Issue #42")
+        );
+        assert_eq!(variable(&output, "author"), Some("ada"));
+        assert_eq!(variable(&output, "site"), Some("GitHub"));
+        assert_eq!(variable(&output, "published"), Some("2026-06-03T04:05:06Z"));
+        assert_eq!(
+            variable(&output, "description"),
+            Some("Track GitHub issue extraction parity.")
+        );
+        assert!(output
+            .org
+            .contains("The issue body describes the extractor variable parity work."));
+        assert!(!output.org.contains("metadata chrome"));
     }
 
     #[test]
@@ -29256,6 +29460,14 @@ mod tests {
         assert_eq!(output.domain, "medium.com");
         assert_eq!(output.description, "Practical notes for extraction parity.");
         assert_eq!(output.published, "2026-02-03T10:00:00Z");
+        assert_eq!(variable(&output, "title"), Some("Testing Rust Extractors"));
+        assert_eq!(variable(&output, "author"), Some("Jane Writer"));
+        assert_eq!(variable(&output, "site"), Some("Better Programming"));
+        assert_eq!(
+            variable(&output, "description"),
+            Some("Practical notes for extraction parity.")
+        );
+        assert_eq!(variable(&output, "published"), None);
         assert!(output.org.contains(
             "The first real paragraph explains why Medium pages need site-specific cleanup."
         ));
@@ -29342,6 +29554,23 @@ mod tests {
         assert_eq!(with_replies.site, "Example Forum");
         assert_eq!(with_replies.domain, "forum.example.com");
         assert_eq!(with_replies.published, "2026-01-01");
+        assert_eq!(
+            with_replies.description,
+            "Plan The original post explains how to port Discourse discussions. Read the docs."
+        );
+        assert_eq!(
+            variable(&with_replies, "title"),
+            Some("Discourse Extraction Plan")
+        );
+        assert_eq!(variable(&with_replies, "author"), Some("op-user"));
+        assert_eq!(variable(&with_replies, "site"), Some("Example Forum"));
+        assert_eq!(
+            variable(&with_replies, "description"),
+            Some(
+                "Plan The original post explains how to port Discourse discussions. Read the docs."
+            )
+        );
+        assert_eq!(variable(&with_replies, "published"), Some("2026-01-01"));
         assert!(with_replies
             .org
             .contains("The original post explains how to port Discourse discussions."));
@@ -29482,6 +29711,23 @@ mod tests {
         assert_eq!(output.domain, "www.nytimes.com");
         assert_eq!(output.description, "A concise article summary.");
         assert_eq!(output.published, "2026-05-01T12:00:00.000Z");
+        assert_eq!(
+            variable(&output, "title"),
+            Some("A Carefully Rendered Article")
+        );
+        assert_eq!(
+            variable(&output, "author"),
+            Some("Reporter One, Reporter Two")
+        );
+        assert_eq!(
+            variable(&output, "published"),
+            Some("2026-05-01T12:00:00.000Z")
+        );
+        assert_eq!(
+            variable(&output, "description"),
+            Some("A concise article summary.")
+        );
+        assert_eq!(variable(&output, "site"), None);
         assert!(output
             .org
             .contains("Lead paragraph with *bold* and [[https://example.com/source][a source]]."));
@@ -29572,6 +29818,18 @@ mod tests {
         assert_eq!(with_replies.site, "LWN.net");
         assert_eq!(with_replies.domain, "lwn.net");
         assert_eq!(with_replies.published, "2026-01-02");
+        assert_eq!(with_replies.description, "A concise LWN description.");
+        assert_eq!(
+            variable(&with_replies, "title"),
+            Some("LWN Extraction Notes")
+        );
+        assert_eq!(variable(&with_replies, "author"), Some("Jake Edge"));
+        assert_eq!(variable(&with_replies, "site"), Some("LWN.net"));
+        assert_eq!(variable(&with_replies, "published"), Some("2026-01-02"));
+        assert_eq!(
+            variable(&with_replies, "description"),
+            Some("A concise LWN description.")
+        );
         assert!(with_replies
             .org
             .contains("The article body explains kernel development workflows."));
@@ -29678,6 +29936,9 @@ Output: [0,1]</code></pre>
         assert_eq!(output.site, "LeetCode");
         assert_eq!(output.domain, "leetcode.com");
         assert_eq!(output.description, "Solve the Two Sum problem.");
+        assert_eq!(variable(&output, "title"), Some("1. Two Sum"));
+        assert_eq!(variable(&output, "site"), Some("LeetCode"));
+        assert_eq!(variable(&output, "description"), None);
         assert!(output.org.contains(
             "Given an array of integers ~nums~ and an integer ~target~, return indices."
         ));

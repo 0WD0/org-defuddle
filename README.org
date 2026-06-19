@@ -415,8 +415,10 @@ Implemented:
   ~contentMarkdown~, while retaining org-defuddle extensions such as ~org~,
   ~html~, ~frontmatter~, and snake-case aliases. HTML parse JSON responses also
   expose real upstream-style ~schemaOrgData~ and ~metaTags~ values from the
-  original document head, plus ~extractorType~ and non-standard extractor
-  ~variables~ such as transcript or selected video-part metadata when a
+  original document head, plus ~extractorType~ and upstream-compatible extractor
+  ~variables~ for selected site metadata on C2 Wiki, GitHub, Hacker News,
+  Medium, Discourse, New York Times, LWN, and LeetCode, plus non-standard
+  custom fields such as transcript or selected video-part metadata when a
   site-specific extractor produces them. Wikipedia content-selector extraction
   and Steam event BBCode extraction also report their upstream extractor
   identities and variables; Steam event bodies take precedence over page-shell
@@ -770,7 +772,8 @@ Remaining audit and future parity work:
   table handling, richer table rendering, and SVG handling.
 - Continue auditing schema.org text fallback coverage and richer
   per-extractor ~variables~ parity for custom fields. The upstream extractor
-  names in the inspected snapshot have Rust implementations, while custom
+  names in the inspected snapshot have Rust implementations, and selected
+  metadata variables now match the inspected upstream definitions; custom
   fields and live browser-only details remain intentionally narrower.
 - Continue deepening fixture-specific Org assertions and add exact-output
   comparisons where Org formatting has a stable upstream-independent contract.

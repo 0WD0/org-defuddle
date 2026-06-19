@@ -1,3 +1,5 @@
+mod partial_selectors;
+
 use kuchiki::traits::*;
 use kuchiki::{ElementData, NodeData, NodeRef};
 use once_cell::sync::Lazy;
@@ -368,13 +370,21 @@ enum SchemaTextFallback {
 
 static WORD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\p{L}\p{N}][\p{L}\p{N}'_-]*").unwrap());
 
-const NOISE_ATTR_PATTERN: &str = r"(advert|ad-|ads|banner|breadcrumb|byline|cookie|comment|copyright|feedback|footer|header|login|menu|nav|newsletter|pagination|popular|promo|recommend|related|share|sidebar|social|sponsor|subscribe|tag|toc|trending|widget)";
+static NOISE_ATTR_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(&format!(
+        "(?i)(?:{})",
+        partial_selectors::PATTERNS.join("|")
+    ))
+    .unwrap()
+});
 
-static NOISE_ATTR_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(&format!("(?i){NOISE_ATTR_PATTERN}")).unwrap());
-
-static NOISE_ATTR_ANCHORED_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(&format!("(?i)^(?:{NOISE_ATTR_PATTERN})$")).unwrap());
+static NOISE_ATTR_ANCHORED_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(&format!(
+        "(?i)^(?:{})$",
+        partial_selectors::PATTERNS.join("|")
+    ))
+    .unwrap()
+});
 
 static EXPLICIT_NO_CONTENT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\bno[-_\s]?content\b").unwrap());
@@ -1048,6 +1058,17 @@ fn parse_html_to_org_once(
 
     sanitize_schema_fallback_candidate(&document, &schema);
 
+    let step_start = Instant::now();
+    let extractor_content_selector = options
+        .content_selector
+        .as_deref()
+        .or(wikipedia_document.then_some("#mw-content-text"));
+    let main = select_configured_main_content(&document, extractor_content_selector)
+        .or_else(|| find_main_content(&document))
+        .unwrap_or_else(|| document.clone());
+    let debug_content_selector = options.debug.then(|| element_selector_path(&main));
+    record_profile(&mut profile, "findMainContent", step_start);
+
     if options.standardize {
         let step_start = Instant::now();
         standardize_callouts(&document);
@@ -1073,10 +1094,18 @@ fn parse_html_to_org_once(
     if options.remove_exact_selectors || options.remove_partial_selectors {
         let step_start = Instant::now();
         if options.remove_exact_selectors {
-            remove_exact_noise(&document, options.debug.then_some(&mut debug_removals));
+            remove_exact_noise(
+                &document,
+                Some(&main),
+                options.debug.then_some(&mut debug_removals),
+            );
         }
         if options.remove_partial_selectors {
-            remove_partial_noise(&document, options.debug.then_some(&mut debug_removals));
+            remove_partial_noise(
+                &document,
+                Some(&main),
+                options.debug.then_some(&mut debug_removals),
+            );
         }
         record_profile(&mut profile, "removeBySelector", step_start);
     }
@@ -1096,17 +1125,6 @@ fn parse_html_to_org_once(
     let step_start = Instant::now();
     remove_orphan_headings(&document);
     record_profile(&mut profile, "standardizeContent", step_start);
-
-    let step_start = Instant::now();
-    let extractor_content_selector = options
-        .content_selector
-        .as_deref()
-        .or(wikipedia_document.then_some("#mw-content-text"));
-    let main = select_configured_main_content(&document, extractor_content_selector)
-        .or_else(|| find_main_content(&document))
-        .unwrap_or_else(|| document.clone());
-    let debug_content_selector = options.debug.then(|| element_selector_path(&main));
-    record_profile(&mut profile, "findMainContent", step_start);
 
     let step_start = Instant::now();
     if options.standardize {
@@ -7113,7 +7131,7 @@ fn x_output(
     normalize_x_media_images(document);
     sanitize_links(document);
     resolve_relative_urls(document, base_url);
-    remove_exact_noise(document, None);
+    remove_exact_noise(document, None, None);
     if !include_images {
         remove_content_images(document);
     }
@@ -12392,12 +12410,16 @@ fn hidden_class_token(class: &str) -> Option<&str> {
     })
 }
 
-fn remove_exact_noise(document: &NodeRef, mut debug_removals: Option<&mut Vec<DebugRemoval>>) {
+fn remove_exact_noise(
+    document: &NodeRef,
+    main: Option<&NodeRef>,
+    mut debug_removals: Option<&mut Vec<DebugRemoval>>,
+) {
     for selector in EXACT_NOISE_SELECTORS {
         if let Ok(matches) = document.select(selector) {
             let nodes: Vec<NodeRef> = matches.map(|m| m.as_node().clone()).collect();
             for node in nodes {
-                if should_skip_exact_noise_node(&node) {
+                if should_skip_exact_noise_node(&node, main) {
                     continue;
                 }
                 if handle_exact_noise_transform(&node) {
@@ -12414,11 +12436,14 @@ fn remove_exact_noise(document: &NodeRef, mut debug_removals: Option<&mut Vec<De
             }
         }
     }
-    remove_conditional_exact_noise(document, debug_removals);
+    remove_conditional_exact_noise(document, main, debug_removals);
 }
 
-fn should_skip_exact_noise_node(node: &NodeRef) -> bool {
+fn should_skip_exact_noise_node(node: &NodeRef, main: Option<&NodeRef>) -> bool {
     if node.parent().is_none() || is_html_or_body_node(node) || is_preserved_noise_node(node) {
+        return true;
+    }
+    if main.is_some_and(|main| node == main || is_descendant_of(main, node)) {
         return true;
     }
     if tag_name(node)
@@ -12438,6 +12463,7 @@ fn should_skip_exact_noise_node(node: &NodeRef) -> bool {
 
 fn remove_conditional_exact_noise(
     document: &NodeRef,
+    main: Option<&NodeRef>,
     mut debug_removals: Option<&mut Vec<DebugRemoval>>,
 ) {
     let Ok(matches) = document.select("*") else {
@@ -12451,7 +12477,7 @@ fn remove_conditional_exact_noise(
         .collect::<Vec<_>>();
 
     for (node, _) in nodes {
-        if should_skip_exact_noise_node(&node) {
+        if should_skip_exact_noise_node(&node, main) {
             continue;
         }
         record_debug_removal(
@@ -12853,7 +12879,11 @@ fn unwrap_node_children_before(node: &NodeRef) {
     node.detach();
 }
 
-fn remove_partial_noise(document: &NodeRef, mut debug_removals: Option<&mut Vec<DebugRemoval>>) {
+fn remove_partial_noise(
+    document: &NodeRef,
+    main: Option<&NodeRef>,
+    mut debug_removals: Option<&mut Vec<DebugRemoval>>,
+) {
     let Ok(matches) = document.select("*") else {
         return;
     };
@@ -12863,7 +12893,18 @@ fn remove_partial_noise(document: &NodeRef, mut debug_removals: Option<&mut Vec<
             if is_html_or_body_node(node) {
                 return None;
             }
+            if main.is_some_and(|main| node == main || is_descendant_of(main, node)) {
+                return None;
+            }
             if is_heading_node(node) {
+                return None;
+            }
+            if tag_name(node)
+                .as_deref()
+                .is_some_and(|tag| matches!(tag, "pre" | "code"))
+                || has_ancestor_tag(node, &["pre", "code"])
+                || count_selector(node, "pre") > 0
+            {
                 return None;
             }
             if contains_article_body_marker(node) {
@@ -23130,7 +23171,7 @@ fn partial_selector_fingerprint(attrs: &str, id: &str) -> String {
 fn partial_selector_noise_pattern(attrs: &str, id: &str) -> Option<String> {
     let attrs = attrs.trim();
     if !attrs.is_empty() {
-        if let Some(matched) = NOISE_ATTR_RE.find(attrs) {
+        if let Some(matched) = partial_selector_match(&NOISE_ATTR_RE, attrs) {
             return Some(matched.as_str().to_ascii_lowercase());
         }
     }
@@ -23140,11 +23181,33 @@ fn partial_selector_noise_pattern(attrs: &str, id: &str) -> Option<String> {
         return None;
     }
     let matched = if partial_selector_id_has_delimiter(id) {
-        NOISE_ATTR_RE.find(id)
+        partial_selector_match(&NOISE_ATTR_RE, id)
     } else {
-        NOISE_ATTR_ANCHORED_RE.find(id)
+        partial_selector_match(&NOISE_ATTR_ANCHORED_RE, id)
     }?;
     Some(matched.as_str().to_ascii_lowercase())
+}
+
+fn partial_selector_match<'a>(regex: &Regex, value: &'a str) -> Option<regex::Match<'a>> {
+    regex
+        .find_iter(value)
+        .find(|matched| !is_upstream_partial_selector_exception(value, matched))
+}
+
+fn is_upstream_partial_selector_exception(value: &str, matched: &regex::Match<'_>) -> bool {
+    let matched_text = matched.as_str().to_ascii_lowercase();
+    let prefix = value[..matched.start()].to_ascii_lowercase();
+    match matched_text.as_str() {
+        "access-wall" => prefix.ends_with("main-"),
+        "related" => {
+            let bytes = prefix.as_bytes();
+            bytes.len() >= 3
+                && bytes[bytes.len() - 3] == b'h'
+                && matches!(bytes[bytes.len() - 2], b'1'..=b'6')
+                && bytes[bytes.len() - 1] == b'-'
+        }
+        _ => false,
+    }
 }
 
 fn partial_selector_id_has_delimiter(id: &str) -> bool {
@@ -29225,6 +29288,51 @@ Output: [0,1]</code></pre>
     }
 
     #[test]
+    fn partial_selector_cleanup_uses_full_upstream_pattern_set() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head><title>Full Partial Selector Set</title></head>
+          <body>
+            <article class="post-content">
+              <h1>Full Partial Selector Set</h1>
+              <p>The article starts with visible content before the auxiliary widgets.</p>
+              <div class="engagement-widget">Engagement widget marker</div>
+              <div class="onward-journey">Onward journey marker</div>
+              <div class="w-form-done">Webflow form success marker</div>
+              <div data-test="main-access-wall">Main access wall content remains</div>
+              <div class="h2-related">Heading-related content remains</div>
+              <p>The concluding paragraph keeps the selected article readable.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/full-partial-selectors".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        for marker in [
+            "Engagement widget marker",
+            "Onward journey marker",
+            "Webflow form success marker",
+        ] {
+            assert!(!output.org.contains(marker), "{marker}\n{}", output.org);
+        }
+        assert!(output.org.contains("Main access wall content remains"));
+        assert!(output.org.contains("Heading-related content remains"));
+    }
+
+    #[test]
     fn exact_button_cleanup_preserves_inline_text_and_media() {
         let html = r##"
         <!doctype html>
@@ -29318,6 +29426,7 @@ Output: [0,1]</code></pre>
                 url: Some("https://example.com/hidden-classes".to_string()),
                 content_selector: Some("article.post-content".to_string()),
                 remove_hidden_elements: false,
+                remove_partial_selectors: false,
                 remove_low_scoring: false,
                 remove_content_patterns: false,
                 ..DefuddleOptions::default()
@@ -30242,8 +30351,9 @@ Output: [0,1]</code></pre>
         assert!(!output.org.contains("[[/categories/1][1]]"));
         let debug = output.debug.expect("debug info should be present");
         assert!(debug.removals.iter().any(|removal| {
-            removal.step == "removeByContentPattern"
-                && removal.reason.as_deref() == Some("standalone date metadata")
+            removal.step == "removeBySelector"
+                && removal.selector.as_deref() == Some("post-meta")
+                && removal.reason.as_deref() == Some("partial match: post-meta")
                 && removal.text.contains("libbenchmark")
         }));
     }

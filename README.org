@@ -663,8 +663,12 @@ Implemented:
   plus UI/form-oriented ~label~ cleanup that preserves flowing prose labels and
   footnote/sidenote labels. It preserves guarded math scripts, source-backed
   audio/video, gradient ad content, and callout asides. Partial selector
-  cleanup follows upstream-style heading preservation and id guards for
-  delimiter-less content anchors and delimited UI ids.
+  cleanup includes all 542 patterns from the inspected upstream snapshot in
+  source order, followed by the 20 broader patterns previously supported by
+  org-defuddle. It follows upstream code-block, main-content ancestor, heading,
+  negative-lookbehind, footnote, math, and id guards. Main content is selected
+  before selector cleanup, matching the upstream pipeline, so noise removal
+  cannot change the selected content candidate or detach its ancestors.
   Button cleanup preserves inline text and extracts media from media-wrapping
   buttons before removing UI controls. Debug/profile records from this pass use
   the upstream ~removeBySelector~ step name.
@@ -729,10 +733,10 @@ Implemented:
 
 Remaining parity work:
 
-- Finish the remaining selector parity gaps that need conditional Rust
-  equivalents for remaining browser-only selectors and high-risk broad
-  selectors beyond the implemented UI-label subset, plus the remaining
-  content-pattern removals.
+- Finish the remaining exact-selector parity gaps that need conditional Rust
+  equivalents for browser-only CSS selectors and high-risk broad selectors
+  beyond the implemented UI-label subset, plus the remaining content-pattern
+  removals.
 - Continue expanding low-scoring block-pruning heuristics to match the full
   upstream scorer.
 - Expand image/media support to the full upstream fixture set, including

@@ -753,7 +753,9 @@ Implemented:
   equations, Wikipedia MathML, full MathJax MathML samples, KaTeX Centraliser
   output, and selected MathJax CHTML output without assistive MathML, using
   ~ORG_DEFUDDLE_DEFUDDLE_DIR~ or the local ~/private/tmp/defuddle-elisp-source~
-  checkout.
+  checkout. Exact Org snapshots now lock stable output for selected embedded
+  videos/iframes, data tables, JavaScript-link unwrapping, and raw-LaTeX math
+  fixtures.
 - Project-level agent instructions in ~AGENTS.md~ adapted from
   ~/repos/coding-guidelines~.
 
@@ -775,5 +777,5 @@ Remaining audit and future parity work:
   names in the inspected snapshot have Rust implementations, and selected
   metadata variables now match the inspected upstream definitions; custom
   fields and live browser-only details remain intentionally narrower.
-- Continue deepening fixture-specific Org assertions and add exact-output
+- Continue deepening fixture-specific Org assertions and expand exact-output
   comparisons where Org formatting has a stable upstream-independent contract.

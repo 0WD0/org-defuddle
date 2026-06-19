@@ -2631,40 +2631,12 @@ fn selected_upstream_fixtures_smoke() {
     let mut metadata_mismatches = Vec::new();
 
     for case in cases {
-        let html_path = defuddle_dir
-            .join("tests")
-            .join("fixtures")
-            .join(format!("{}.html", case.fixture));
         let expected_path = defuddle_dir
             .join("tests")
             .join("expected")
             .join(format!("{}.md", case.fixture));
-        let html = std::fs::read_to_string(&html_path)
-            .unwrap_or_else(|err| panic!("failed to read {}: {err}", html_path.display()));
         let expected = read_expected_metadata(&expected_path);
-        let url = fixture_url_override(case.fixture).or_else(|| fixture_url(&html));
-        let output = parse_html_to_org(
-            &html,
-            DefuddleOptions {
-                url,
-                include_images: true,
-                remove_small_images: true,
-                content_selector: None,
-                include_replies: IncludeReplies::Extractors,
-                remove_hidden_elements: true,
-                remove_exact_selectors: true,
-                remove_partial_selectors: true,
-                remove_content_patterns: true,
-                remove_low_scoring: true,
-                standardize: true,
-                debug: false,
-                profile: false,
-                frontmatter: false,
-                markdown: false,
-                separate_markdown: false,
-            },
-        )
-        .unwrap_or_else(|err| panic!("failed to parse {}: {err}", case.fixture));
+        let output = parse_upstream_fixture(&defuddle_dir, case.fixture);
 
         for (field, actual, expected) in [
             ("title", output.title.as_str(), expected.title.as_str()),
@@ -2713,6 +2685,170 @@ fn selected_upstream_fixtures_smoke() {
         "fixture metadata mismatches:\n{}",
         metadata_mismatches.join("\n")
     );
+}
+
+#[test]
+fn selected_upstream_fixtures_exact_org_snapshots() {
+    let Some(defuddle_dir) = upstream_dir() else {
+        eprintln!(
+            "skipping upstream fixture exact Org snapshots; set ORG_DEFUDDLE_DEFUDDLE_DIR to a defuddle checkout"
+        );
+        return;
+    };
+
+    let cases = [
+        (
+            "elements--embedded-videos",
+            r#"* Embedded videos test
+:PROPERTIES:
+:WORD_COUNT: 20
+:END:
+
+A YouTube video:
+
+[[https://www.youtube.com/watch?v=b_PXuEPxN50]]
+
+A YouTube nocookie video:
+
+[[https://www.youtube.com/watch?v=b_PXuEPxN50]]
+
+A tweet:
+
+[[https://x.com/i/status/1675626836821409792]]
+
+An X.com embed:
+
+[[https://x.com/kepano/status/1675626836821409792]]
+
+A Vimeo video should stay as iframe:
+
+#+begin_export html
+<iframe src="https://player.vimeo.com/video/45725193?h=a290f71a57" width="100%" height="100%" frameborder="0" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen=""></iframe>
+#+end_export
+"#,
+        ),
+        (
+            "elements--data-table",
+            r#"* Data Table Test
+:PROPERTIES:
+:WORD_COUNT: 53
+:END:
+
+** Programming Language Comparison
+
+Here is a comparison of popular programming languages:
+
+| Language | Year | Typing | Primary Use |
+| Python | 1991 | Dynamic | General purpose, data science |
+| Rust | 2015 | Static | Systems programming |
+| TypeScript | 2012 | Static | Web development |
+| Go | 2009 | Static | Cloud infrastructure |
+
+Each language has its strengths and trade-offs.
+
+** Without thead
+
+| Name | Score |
+| Alice | 95 |
+| Bob | 87 |
+"#,
+        ),
+        (
+            "elements--javascript-links",
+            r#"* JavaScript Links Test
+:PROPERTIES:
+:WORD_COUNT: 55
+:END:
+
+This has a simple js link in a sentence.
+
+Here is a link with onclick and a link with alert that should both be unwrapped.
+
+A *bold js link* should keep its inner HTML.
+
+Normal links like [[https://example.com][Example]] and [[https://example.com/page][another page]] should stay as links.
+
+Mixed: [[https://example.com][real link]], then js link, then [[https://example.com/other][another real link]].
+"#,
+        ),
+        (
+            "math--raw-latex",
+            r#"* Raw LaTeX Math Delimiters
+:PROPERTIES:
+:LANGUAGE: en
+:WORD_COUNT: 123
+:END:
+
+The attention mechanism computes $h_{i}^{\ell+1} = \text{Attention} \left( Q^{\ell} h_{i}^{\ell}, K^{\ell} h_{j}^{\ell}, V^{\ell} h_{j}^{\ell} \right)$ for each node in the graph.
+
+Here $f(x) = \sum_{i=0}^{n} \frac{a_i}{i!} x^i$ is the Taylor expansion and $g(x) = \int_0^1 e^{-t^2} dt$ is the Gaussian integral.
+
+The loss function is defined as:
+
+$$
+\mathcal{L}(\theta) = -\frac{1}{N} \sum_{i=1}^{N} \log p_\theta(x_i)
+$$
+
+This costs $100 per unit, which is not math.
+
+Let $x$ be a variable and $n$ be an integer.
+
+The backslash delimiters work too: $E = mc^2$ is inline and
+
+$$
+F = ma
+$$
+
+#+begin_src
+This $\alpha$ should not be touched inside pre tags.
+#+end_src
+"#,
+        ),
+    ];
+
+    for (fixture, expected_org) in cases {
+        let output = parse_upstream_fixture(&defuddle_dir, fixture);
+        assert_eq!(
+            output.org.trim_end(),
+            expected_org.trim_end(),
+            "fixture {fixture} exact Org mismatch"
+        );
+    }
+}
+
+fn parse_upstream_fixture(
+    defuddle_dir: &std::path::Path,
+    fixture: &str,
+) -> org_defuddle_core::DefuddleOutput {
+    let html_path = defuddle_dir
+        .join("tests")
+        .join("fixtures")
+        .join(format!("{fixture}.html"));
+    let html = std::fs::read_to_string(&html_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", html_path.display()));
+    let url = fixture_url_override(fixture).or_else(|| fixture_url(&html));
+    parse_html_to_org(
+        &html,
+        DefuddleOptions {
+            url,
+            include_images: true,
+            remove_small_images: true,
+            content_selector: None,
+            include_replies: IncludeReplies::Extractors,
+            remove_hidden_elements: true,
+            remove_exact_selectors: true,
+            remove_partial_selectors: true,
+            remove_content_patterns: true,
+            remove_low_scoring: true,
+            standardize: true,
+            debug: false,
+            profile: false,
+            frontmatter: false,
+            markdown: false,
+            separate_markdown: false,
+        },
+    )
+    .unwrap_or_else(|err| panic!("failed to parse {fixture}: {err}"))
 }
 
 fn read_expected_metadata(path: &std::path::Path) -> ExpectedMetadata {

@@ -377,7 +377,9 @@ Implemented:
 - Configurable small-image cleanup through a ~removeSmallImages~-style option
   exposed as ~:remove-small-images~ in Elisp.
 - Configurable Org-oriented standardization through a ~standardize~-style
-  option across the Rust core, dynamic module, and Elisp wrappers.
+  option across the Rust core, dynamic module, and Elisp wrappers. Disabling it
+  preserves raw media/custom elements instead of converting lite YouTube
+  embeds, adding video controls, or removing obsolete plugin elements.
 - Debug and profiling diagnostics through ~debug~- and ~profile~-style options
   across the Rust core, dynamic module, and Elisp JSON wrapper, including
   selected removal records from hidden-element, selector, upstream-style

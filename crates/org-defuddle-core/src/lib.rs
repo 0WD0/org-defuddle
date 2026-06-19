@@ -1225,7 +1225,7 @@ fn parse_html_to_org_once(
         record_profile(&mut profile, "removeHiddenElements", step_start);
     }
     let step_start = Instant::now();
-    normalize_images(&document);
+    normalize_images_with_standardize(&document, options.standardize);
     let elapsed = step_start.elapsed();
     record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
     if options.standardize {
@@ -13730,18 +13730,35 @@ fn remove_heading_permalink_anchors(document: &NodeRef) {
 }
 
 fn normalize_images(document: &NodeRef) {
-    remove_obsolete_embed_elements(document);
-    normalize_svg_fallback_styles(document);
+    normalize_images_with_standardize(document, true);
+}
+
+fn normalize_images_with_standardize(document: &NodeRef, standardize: bool) {
+    normalize_image_attribute_casing(document);
     promote_noscript_images(document);
-    normalize_picture_images(document);
-    normalize_standalone_source_images(document);
-    normalize_lazy_images(document);
-    normalize_lazy_iframes(document);
-    normalize_lite_youtube_embeds(document);
-    normalize_video_controls(document);
-    normalize_custom_image_elements(document);
+    if standardize {
+        remove_obsolete_embed_elements(document);
+        normalize_svg_fallback_styles(document);
+        normalize_picture_images(document);
+        normalize_standalone_source_images(document);
+        normalize_lazy_images(document);
+        normalize_lazy_iframes(document);
+        normalize_lite_youtube_embeds(document);
+        normalize_video_controls(document);
+        normalize_custom_image_elements(document);
+    }
     dedupe_figure_images(document);
     dedupe_adjacent_lazy_images(document);
+}
+
+fn normalize_image_attribute_casing(document: &NodeRef) {
+    let Ok(matches) = document.select("img, source") else {
+        return;
+    };
+    for matched in matches {
+        let mut attrs = matched.attributes.borrow_mut();
+        normalize_case_insensitive_attr(&mut attrs, "srcset");
+    }
 }
 
 fn normalize_svg_fallback_styles(document: &NodeRef) {
@@ -33610,6 +33627,12 @@ Output: [0,1]</code></pre>
               <ol>
                 <li id="fn1">The original footnote text should still be present somewhere.</li>
               </ol>
+              <p>The article also contains media elements whose normalization follows the standardize option.</p>
+              <video id="standardize-video" src="/media/clip.mp4"></video>
+              <lite-youtube videoid="abc123" videotitle="Standardize video"></lite-youtube>
+              <object id="legacy-object" data="/media/player.swf">Object fallback text.</object>
+              <embed id="legacy-embed" src="/media/plugin.mov" type="video/quicktime">
+              <applet id="legacy-applet" code="Legacy.class">Applet fallback text.</applet>
             </article>
           </body>
         </html>
@@ -33642,6 +33665,26 @@ Output: [0,1]</code></pre>
         assert!(with_standardize
             .org
             .contains("[fn:1] The original footnote text"));
+        assert!(with_standardize.html.contains("id=\"standardize-video\""));
+        assert!(with_standardize.html.contains("controls=\"\""));
+        assert!(with_standardize
+            .org
+            .contains("[[https://example.com/media/clip.mp4]]"));
+        assert!(with_standardize
+            .org
+            .contains("[[https://www.youtube.com/watch?v=abc123]]"));
+        for marker in [
+            "lite-youtube",
+            "legacy-object",
+            "legacy-embed",
+            "legacy-applet",
+        ] {
+            assert!(
+                !with_standardize.html.contains(marker),
+                "{}",
+                with_standardize.html
+            );
+        }
 
         let without_standardize = parse_html_to_org(
             html,
@@ -33671,6 +33714,25 @@ Output: [0,1]</code></pre>
         assert!(without_standardize
             .org
             .contains("The original footnote text should still be present somewhere."));
+        let raw_video = without_standardize
+            .html
+            .split("id=\"standardize-video\"")
+            .nth(1)
+            .and_then(|tail| tail.split("</video>").next())
+            .unwrap_or_default();
+        assert!(!raw_video.contains("controls"));
+        for marker in [
+            "lite-youtube",
+            "legacy-object",
+            "legacy-embed",
+            "legacy-applet",
+        ] {
+            assert!(
+                without_standardize.html.contains(marker),
+                "{}",
+                without_standardize.html
+            );
+        }
     }
 
     #[test]

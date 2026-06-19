@@ -1011,6 +1011,8 @@ fn parse_html_to_org_once(
         && find_node_by_id(&document, "mw-content-text").is_some();
     record_profile(&mut profile, "extractDataAttributeContent", step_start);
 
+    sanitize_schema_fallback_candidate(&document, &schema);
+
     if options.standardize {
         let step_start = Instant::now();
         standardize_callouts(&document);
@@ -11571,8 +11573,38 @@ fn schema_text_fallback(
     }
 
     find_schema_text_container(document, &schema_text)
-        .map(SchemaTextFallback::Node)
+        .map(|node| {
+            sanitize_schema_fallback_content(&node);
+            SchemaTextFallback::Node(node)
+        })
         .or_else(|| Some(SchemaTextFallback::Text(schema_text)))
+}
+
+fn sanitize_schema_fallback_candidate(document: &NodeRef, schema: &[Value]) {
+    let Some(schema_text) = schema_content_text(schema) else {
+        return;
+    };
+    if count_words(&schema_text) < 20 {
+        return;
+    }
+    if let Some(node) = find_schema_text_container(document, &schema_text) {
+        sanitize_schema_fallback_content(&node);
+    }
+}
+
+fn sanitize_schema_fallback_content(node: &NodeRef) {
+    let Ok(matches) = node.select(
+        "script:not([type^=\"math/\"]), style, noscript, frame, frameset, object, embed, applet, base",
+    ) else {
+        return;
+    };
+    let unsafe_nodes = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for unsafe_node in unsafe_nodes {
+        unsafe_node.detach();
+    }
+    sanitize_links(node);
 }
 
 fn data_attribute_content_fallback(body_html: Option<&str>) -> Option<SchemaTextFallback> {
@@ -13045,36 +13077,30 @@ fn is_pronunciation_annotation_node(node: &NodeRef) -> bool {
 }
 
 fn sanitize_links(document: &NodeRef) {
+    sanitize_element_attributes(document);
     let Ok(matches) = document.select("*") else {
         return;
     };
     for node in matches {
-        let mut attrs = node.attributes.borrow_mut();
-        let remove_attrs: Vec<String> = attrs
-            .map
-            .keys()
-            .filter_map(|name| {
-                let local = name.local.as_ref();
-                if local.starts_with("on") || local == "srcdoc" {
-                    Some(local.to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        for name in remove_attrs {
-            attrs.remove(name.as_str());
-        }
-        for name in ["href", "src", "poster"] {
-            if attrs
-                .get(name)
-                .map(|v| is_dangerous_url(v))
-                .unwrap_or(false)
-            {
-                attrs.remove(name);
-            }
-        }
+        sanitize_element_attributes(node.as_node());
     }
+}
+
+fn sanitize_element_attributes(node: &NodeRef) {
+    let Some(element) = node.as_element() else {
+        return;
+    };
+    let mut attrs = element.attributes.borrow_mut();
+    attrs.map.retain(|name, value| {
+        let local = name.local.as_ref().to_ascii_lowercase();
+        if local.starts_with("on") || local == "srcdoc" {
+            return false;
+        }
+        !matches!(
+            local.as_str(),
+            "href" | "src" | "poster" | "action" | "formaction"
+        ) || !is_dangerous_url(&value.value)
+    });
 }
 
 fn remove_heading_permalink_anchors(document: &NodeRef) {
@@ -14767,7 +14793,7 @@ fn resolve_relative_urls(document: &NodeRef, base_url: &str) {
 }
 
 fn document_base_url(document: &NodeRef, page_url: &str) -> String {
-    select_first_attr_raw(document, "base[href]", "href")
+    select_first_attr_raw(document, "head base[href]", "href")
         .and_then(|href| absolutize_url((!page_url.trim().is_empty()).then_some(page_url), &href))
         .unwrap_or_else(|| page_url.to_string())
 }
@@ -31875,6 +31901,85 @@ line break text.">
         assert!(output.org.contains("This is the full post body"));
         assert!(output.org.contains("Final matched paragraph."));
         assert!(!output.org.contains("Short article summary."));
+    }
+
+    #[test]
+    fn sanitizes_schema_fallback_when_optional_cleanup_is_disabled() {
+        let schema_text = "This is the full schema-backed post body with enough words to exceed the short summary selected by the content scorer. Additional sentences make the fallback deterministic while preserving the intended article text for extraction.";
+        let html = format!(
+            r#"
+        <!doctype html>
+        <html>
+          <head>
+            <title>Schema Security</title>
+            <script type="application/ld+json">
+            {{
+              "@type": "SocialMediaPosting",
+              "text": "{schema_text}"
+            }}
+            </script>
+          </head>
+          <body>
+            <base href="https://evil.example/">
+            <article><h1>Summary</h1><p>Short summary.</p></article>
+            <div class="full-post" onclick="rootHandler()">
+              <p>{schema_text}</p>
+              <style>@import url("https://evil.example/leak.css");</style>
+              <script>alert("script")</script>
+              <noscript><img src="https://evil.example/track.png"></noscript>
+              <object data="https://evil.example/plugin"></object>
+              <embed src="https://evil.example/embed">
+              <applet code="https://evil.example/applet"></applet>
+              <iframe src="https://www.youtube.com/embed/abc" srcdoc="<script>alert(1)</script>"></iframe>
+              <img src="data:text/html,unsafe" onerror="alert(2)" onclick="steal()">
+              <a href="javascript:alert(3)">Unsafe link</a>
+              <form action="javascript:alert(4)"><button>Submit</button></form>
+              <svg viewBox="0 0 20 20"><a xlink:href="javascript:alert(5)"><circle cx="10" cy="10" r="8"></circle></a></svg>
+              <a href="relative-page">Safe relative link</a>
+            </div>
+          </body>
+        </html>
+        "#
+        );
+
+        let output = parse_html_to_org(
+            &html,
+            DefuddleOptions {
+                url: Some("https://example.com/posts/schema".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                standardize: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.html.contains("full schema-backed post body"));
+        assert!(output.html.contains("youtube.com/embed/abc"));
+        assert!(output
+            .html
+            .contains("https://example.com/posts/relative-page"));
+        for unsafe_text in [
+            "<style",
+            "<script",
+            "<noscript",
+            "<object",
+            "<embed",
+            "<applet",
+            "srcdoc",
+            "onerror",
+            "onclick",
+            "rootHandler",
+            "javascript:",
+            "data:text/html",
+            "evil.example",
+        ] {
+            assert!(
+                !output.html.contains(unsafe_text),
+                "unsafe fallback output contains {unsafe_text}: {}",
+                output.html
+            );
+        }
     }
 
     #[test]

@@ -486,7 +486,11 @@ Implemented:
   replacement thresholds and does not introduce known trailing page chrome.
 - Selected schema.org text fallback: when ~articleBody~ or ~text~ contains
   substantially more content than the scored extraction, the core uses the
-  matching DOM content container or falls back to the schema text.
+  matching DOM content container or falls back to the schema text. Matching
+  containers are sanitized independently of optional selector and
+  standardization settings: unsafe elements, event handlers, ~srcdoc~, and
+  dangerous URL attributes are removed while legitimate iframe embeds remain.
+  Only document-head ~base~ elements participate in relative URL resolution.
 - Selected visible description lede recovery when a page's exact meta
   description appears in a standalone paragraph outside the selected main
   content container.

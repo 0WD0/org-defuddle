@@ -115,6 +115,7 @@ pub struct MetaTagItem {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct DebugInfo {
+    #[serde(rename = "contentSelector")]
     pub content_selector: String,
     pub removals: Vec<DebugRemoval>,
 }
@@ -216,8 +217,19 @@ fn output_json_value_with_extras(
         "metaTags": meta_tags,
         "extractorType": output.extractor_type,
         "variables": output.variables,
-        "debug": output.debug,
+        "debug": debug_json_value(output.debug.as_ref()),
         "profile": output.profile,
+    })
+}
+
+fn debug_json_value(debug: Option<&DebugInfo>) -> Value {
+    let Some(debug) = debug else {
+        return Value::Null;
+    };
+    json!({
+        "contentSelector": debug.content_selector,
+        "content_selector": debug.content_selector,
+        "removals": debug.removals,
     })
 }
 
@@ -31639,7 +31651,7 @@ line break text.">
             .contains("org-defuddle"));
         assert!(output_property(&output, "debug")
             .unwrap()
-            .contains("content_selector"));
+            .contains("contentSelector"));
         assert!(output_property(&output, "missing").is_none());
 
         let json = output_json_value(&output);
@@ -31660,6 +31672,8 @@ line break text.">
         );
         assert_eq!(json["extractorType"], "github");
         assert_eq!(json["variables"]["repository"], "org-defuddle");
+        assert_eq!(json["debug"]["contentSelector"], "html > body > article");
+        assert_eq!(json["debug"]["content_selector"], "html > body > article");
         assert!(json["schemaOrgData"].is_null());
         assert_eq!(json["metaTags"].as_array().unwrap().len(), 0);
 

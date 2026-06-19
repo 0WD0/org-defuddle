@@ -301,7 +301,8 @@ Known remaining gaps:
   ~removeBySelector~ selector cleanup,
   upstream-style ~scoreAndRemove~ low-scoring cleanup, and upstream-style
   ~removeByContentPattern~ cleanup. Coverage is still narrower than upstream's
-  full debug removals.
+  full debug removals. Debug JSON uses upstream ~contentSelector~ naming and
+  retains ~content_selector~ as an org-defuddle compatibility alias.
 
 Implemented:
 

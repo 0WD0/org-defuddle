@@ -20215,6 +20215,7 @@ impl MarkdownRenderer {
             "iframe" => self.render_iframe(element),
             "video" | "audio" => self.render_raw_html(node, inline),
             "ol" if markdown_is_footnotes_list(node) => self.render_footnotes_list(node),
+            "ol" if markdown_is_arxiv_enumerate(element) => self.render_arxiv_enumerate(node),
             "ul" | "ol" => {
                 self.ensure_newline();
                 self.list_depth += 1;
@@ -20305,6 +20306,47 @@ impl MarkdownRenderer {
         for child in node.children() {
             if child == *heading {
                 continue;
+            }
+            nested.render_node(&child, false);
+        }
+        cleanup_markdown(&nested.out).trim().to_string()
+    }
+
+    fn render_arxiv_enumerate(&mut self, node: &NodeRef) {
+        self.ensure_blank_line();
+        let mut index = 1;
+        for child in node.children() {
+            if child.as_element().is_none() {
+                continue;
+            }
+            let content = self.render_arxiv_enumerate_item_content(&child);
+            if content.is_empty() {
+                continue;
+            }
+            self.out.push_str(&index.to_string());
+            self.out.push_str(". ");
+            self.out.push_str(&content);
+            self.out.push_str("\n\n");
+            index += 1;
+        }
+    }
+
+    fn render_arxiv_enumerate_item_content(&self, node: &NodeRef) -> String {
+        let mut nested = MarkdownRenderer {
+            out: String::new(),
+            list_depth: self.list_depth,
+            suppress_next_space: false,
+        };
+        let mut skipped_tag = false;
+        for child in node.children() {
+            if !skipped_tag && markdown_is_ltx_tag_item(&child) {
+                skipped_tag = true;
+                continue;
+            }
+            if child.as_element().is_some()
+                || matches!(child.data(), NodeData::Text(text) if !text.borrow().trim().is_empty())
+            {
+                skipped_tag = true;
             }
             nested.render_node(&child, false);
         }
@@ -20746,6 +20788,16 @@ fn markdown_complex_link_heading(node: &NodeRef) -> Option<NodeRef> {
             Some("h1" | "h2" | "h3" | "h4" | "h5" | "h6")
         )
     })
+}
+
+fn markdown_is_arxiv_enumerate(element: &ElementData) -> bool {
+    has_class(element, "ltx_enumerate")
+}
+
+fn markdown_is_ltx_tag_item(node: &NodeRef) -> bool {
+    tag_name(node).as_deref() == Some("span")
+        && has_class_token(node, "ltx_tag")
+        && has_class_token(node, "ltx_tag_item")
 }
 
 fn markdown_footnote_backref(element: &ElementData) -> bool {
@@ -33345,6 +33397,19 @@ line break text.">
         assert!(complex_link
             .contains("[View original](https://example.com/original \"Original page\")"));
         assert!(!complex_link.contains("[## Linked Card Title"));
+
+        let arxiv_enumerate = html_fragment_to_markdown(
+            r#"<article>
+              <ol class="ltx_enumerate">
+                <li><span class="ltx_tag ltx_tag_item">1.</span> First <em>item</em></li>
+                <li><span class="ltx_tag ltx_tag_item">2.</span> Second item</li>
+              </ol>
+            </article>"#,
+        );
+        assert!(arxiv_enumerate.contains("1. First *item*"));
+        assert!(arxiv_enumerate.contains("2. Second item"));
+        assert!(!arxiv_enumerate.contains("1. 1."));
+        assert!(!arxiv_enumerate.contains("2. 2."));
     }
 
     #[test]

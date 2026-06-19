@@ -20144,6 +20144,7 @@ struct MarkdownRenderer {
     out: String,
     list_depth: usize,
     suppress_next_space: bool,
+    force_inline_math: bool,
 }
 
 impl MarkdownRenderer {
@@ -20152,6 +20153,7 @@ impl MarkdownRenderer {
             out: String::new(),
             list_depth: 0,
             suppress_next_space: false,
+            force_inline_math: false,
         }
     }
 
@@ -20277,21 +20279,8 @@ impl MarkdownRenderer {
         let remaining = self.render_complex_link_remaining(node, &heading);
         if !remaining.is_empty() {
             self.ensure_blank_line();
-            if let Some(href) = href.as_deref().filter(|href| !is_dangerous_url(href)) {
-                self.out.push('[');
-                if remaining.starts_with("![") {
-                    self.out.push_str(&remaining);
-                } else {
-                    self.out.push_str(&escape_markdown_link_text(&remaining));
-                }
-                self.out.push_str("](");
-                self.out
-                    .push_str(&markdown_link_destination(href.trim(), title.as_deref()));
-                self.out.push_str(")\n\n");
-            } else {
-                self.out.push_str(&remaining);
-                self.out.push_str("\n\n");
-            }
+            self.out.push_str(&remaining);
+            self.out.push_str("\n\n");
         }
 
         if let Some(href) = href.as_deref().filter(|href| !is_dangerous_url(href)) {
@@ -20308,6 +20297,7 @@ impl MarkdownRenderer {
             out: String::new(),
             list_depth: self.list_depth,
             suppress_next_space: false,
+            force_inline_math: self.force_inline_math,
         };
         for child in node.children() {
             if child == *heading {
@@ -20342,6 +20332,7 @@ impl MarkdownRenderer {
             out: String::new(),
             list_depth: self.list_depth,
             suppress_next_space: false,
+            force_inline_math: self.force_inline_math,
         };
         let mut skipped_tag = false;
         for child in node.children() {
@@ -20365,11 +20356,73 @@ impl MarkdownRenderer {
     }
 
     fn render_figure(&mut self, node: &NodeRef) {
+        let Some(image) = select_first_node(node, "img") else {
+            self.render_figure_children(node);
+            return;
+        };
+        if markdown_figure_has_paragraphs_outside_caption(node) {
+            self.render_figure_children(node);
+            return;
+        }
+        let Some(image_element) = image.as_element() else {
+            self.render_figure_children(node);
+            return;
+        };
+        let image_attrs = image_element.attributes.borrow();
+        let src = image_attrs
+            .get("srcset")
+            .and_then(best_srcset_url)
+            .or_else(|| image_attrs.get("src").map(str::to_string))
+            .unwrap_or_default();
+        let alt = image_attrs.get("alt").unwrap_or("").to_string();
+        drop(image_attrs);
+        if is_dangerous_url(&src) {
+            self.render_figure_children(node);
+            return;
+        }
+
+        self.ensure_blank_line();
+        self.out.push_str("![");
+        self.out.push_str(&alt);
+        self.out.push_str("](");
+        self.out.push_str(&src);
+        self.out.push(')');
+
+        if let Some(figcaption) = select_first_node(node, "figcaption") {
+            let caption = self.render_figure_caption(&figcaption);
+            if !caption.is_empty() {
+                self.out.push_str("\n\n");
+                self.out.push_str(&caption);
+            }
+        }
+        self.out.push_str("\n\n");
+    }
+
+    fn render_figure_children(&mut self, node: &NodeRef) {
         self.ensure_blank_line();
         for child in node.children() {
             self.render_node(&child, false);
         }
         self.ensure_newline();
+    }
+
+    fn render_figure_caption(&self, node: &NodeRef) -> String {
+        let tag = select_first_text(node, ".ltx_tag_figure").unwrap_or_default();
+        let mut nested = MarkdownRenderer {
+            out: String::new(),
+            list_depth: self.list_depth,
+            suppress_next_space: false,
+            force_inline_math: true,
+        };
+        for child in node.children() {
+            nested.render_node(&child, true);
+        }
+        let caption = cleanup_markdown(&nested.out).trim().to_string();
+        match (tag.is_empty(), caption.is_empty()) {
+            (true, _) => caption,
+            (_, true) => tag,
+            (false, false) => format!("{tag} {caption}"),
+        }
     }
 
     fn render_iframe(&mut self, node: &NodeRef, element: &ElementData, inline: bool) {
@@ -20389,6 +20442,7 @@ impl MarkdownRenderer {
             out: String::new(),
             list_depth: self.list_depth,
             suppress_next_space: false,
+            force_inline_math: self.force_inline_math,
         };
         match callout.content_node {
             Some(content) => {
@@ -20598,6 +20652,7 @@ impl MarkdownRenderer {
             out: String::new(),
             list_depth: 0,
             suppress_next_space: false,
+            force_inline_math: self.force_inline_math,
         };
         for child in node.children() {
             if markdown_is_redundant_footnote_label(&child, id) {
@@ -20632,7 +20687,7 @@ impl MarkdownRenderer {
     }
 
     fn render_math(&mut self, node: &NodeRef, math: MathInfo) {
-        if math.is_block || is_standalone_node_in_block(node) {
+        if !self.force_inline_math && (math.is_block || is_standalone_node_in_block(node)) {
             self.ensure_blank_line();
             self.out.push_str("$$\n");
             self.out.push_str(&math.latex);
@@ -20647,21 +20702,20 @@ impl MarkdownRenderer {
 
     fn render_fenced_code(&mut self, node: &NodeRef) {
         let text = code_block_text(node);
-        let text = text.trim_matches('\n');
-        if text.trim().is_empty() {
+        let text = text.trim();
+        if text.is_empty() {
             return;
         }
-        let fence = markdown_fence(text);
+        let text = text.replace('`', "\\`");
         self.ensure_blank_line();
-        self.out.push_str(&fence);
+        self.out.push_str("```");
         if let Some(language) = code_language(node) {
             self.out.push_str(&language);
         }
         self.out.push('\n');
-        self.out.push_str(text);
+        self.out.push_str(&text);
         self.out.push('\n');
-        self.out.push_str(&fence);
-        self.out.push_str("\n\n");
+        self.out.push_str("```\n\n");
     }
 
     fn render_inline_code_text(&mut self, text: &str) {
@@ -20776,6 +20830,7 @@ impl MarkdownRenderer {
             out: String::new(),
             list_depth: self.list_depth,
             suppress_next_space: false,
+            force_inline_math: self.force_inline_math,
         };
         for child in node.children() {
             nested.render_node(&child, true);
@@ -20788,6 +20843,7 @@ impl MarkdownRenderer {
             out: String::new(),
             list_depth: self.list_depth,
             suppress_next_space: false,
+            force_inline_math: self.force_inline_math,
         };
         for child in node.children() {
             nested.render_node(&child, false);
@@ -20880,6 +20936,25 @@ fn markdown_is_ltx_tag_item(node: &NodeRef) -> bool {
     tag_name(node).as_deref() == Some("span")
         && has_class_token(node, "ltx_tag")
         && has_class_token(node, "ltx_tag_item")
+}
+
+fn markdown_figure_has_paragraphs_outside_caption(node: &NodeRef) -> bool {
+    let Ok(paragraphs) = node.select("p") else {
+        return false;
+    };
+    paragraphs
+        .map(|paragraph| paragraph.as_node().clone())
+        .any(|paragraph| {
+            for ancestor in paragraph.ancestors() {
+                if ancestor == *node {
+                    return true;
+                }
+                if tag_name(&ancestor).as_deref() == Some("figcaption") {
+                    return false;
+                }
+            }
+            true
+        })
 }
 
 fn markdown_equation_table_math(node: &NodeRef) -> Option<Vec<MathInfo>> {
@@ -25319,20 +25394,6 @@ fn markdown_code_span(text: &str) -> String {
     } else {
         format!("`{text}`")
     }
-}
-
-fn markdown_fence(text: &str) -> String {
-    let longest = text
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim_start();
-            trimmed
-                .starts_with("```")
-                .then(|| trimmed.chars().take_while(|ch| *ch == '`').count())
-        })
-        .max()
-        .unwrap_or(2);
-    "`".repeat(longest.max(2) + 1)
 }
 
 fn markdown_table_cell(text: &str) -> String {
@@ -33661,12 +33722,11 @@ line break text.">
             </article>"#,
         );
         assert!(complex_link.contains("## Linked Card Title"));
-        assert!(complex_link.contains(
-            "[Summary with **detail**.](https://example.com/original \"Original page\")"
-        ));
+        assert!(complex_link.contains("Summary with **detail**."));
         assert!(complex_link
             .contains("[View original](https://example.com/original \"Original page\")"));
         assert!(!complex_link.contains("[## Linked Card Title"));
+        assert!(!complex_link.contains("[Summary with **detail**.]"));
 
         let arxiv_enumerate = html_fragment_to_markdown(
             r#"<article>
@@ -33847,6 +33907,53 @@ line break text.">
             r#"<article><table><tr><td>A</td><td>B</td></tr></table></article>"#,
         );
         assert!(one_row_table.contains("| A | B |\n| --- | --- |"));
+    }
+
+    #[test]
+    fn markdown_conversion_matches_upstream_figure_and_code_rules() {
+        let figure = html_fragment_to_markdown(
+            r#"<article>
+              <figure>
+                <a href="https://example.com/full"><img src="https://example.com/small.jpg" srcset="https://example.com/small.jpg 640w, https://example.com/large.jpg 1600w" alt="Diagram" title="Ignored figure title"></a>
+                <img src="https://example.com/second.jpg" alt="Second image">
+                <figcaption><span class="ltx_tag_figure">Figure 2.</span> Loss <math display="block" data-latex="L=x^2">L=x2</math> from <a href="https://example.com/source">source</a>.</figcaption>
+              </figure>
+            </article>"#,
+        );
+        assert!(figure.contains("![Diagram](https://example.com/large.jpg)"));
+        assert!(!figure.contains("Ignored figure title"));
+        assert!(!figure.contains("https://example.com/full"));
+        assert!(!figure.contains("https://example.com/second.jpg"));
+        assert!(figure.contains(
+            "Figure 2. Figure 2. Loss $L=x^2$ from [source](https://example.com/source)."
+        ));
+        assert!(!figure.contains("$$"));
+
+        let content_wrapper = html_fragment_to_markdown(
+            r#"<article>
+              <figure>
+                <img src="https://example.com/wrapper.jpg" alt="Wrapper image">
+                <p>Body prose with <strong>important detail</strong> must survive.</p>
+                <figcaption>Wrapper caption.</figcaption>
+              </figure>
+            </article>"#,
+        );
+        assert!(content_wrapper.contains("![Wrapper image](https://example.com/wrapper.jpg)"));
+        assert!(content_wrapper.contains("Body prose with **important detail** must survive."));
+        assert!(content_wrapper.contains("Wrapper caption."));
+
+        let code = html_fragment_to_markdown(
+            r#"<article><pre data-language="rust"><code>  let value = `tick`;
+```danger
+</code></pre></article>"#,
+        );
+        assert!(code.contains(
+            r#"```rust
+let value = \`tick\`;
+\`\`\`danger
+```"#
+        ));
+        assert!(!code.contains("````"));
     }
 
     #[test]

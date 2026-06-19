@@ -12136,7 +12136,7 @@ fn remove_hidden_elements(document: &NodeRef, mut debug_removals: Option<&mut Ve
     let Ok(matches) = document.select("*") else {
         return;
     };
-    let nodes: Vec<NodeRef> = matches
+    let nodes: Vec<(NodeRef, String)> = matches
         .filter_map(|m| {
             let node = m.as_node();
             if is_html_or_body_node(node) {
@@ -12144,10 +12144,7 @@ fn remove_hidden_elements(document: &NodeRef, mut debug_removals: Option<&mut Ve
             }
             let attrs = m.attributes.borrow();
             let hidden_attr = attrs.contains("hidden") || attrs.contains("inert");
-            let class_hidden = attrs
-                .get("class")
-                .map(is_hidden_class_value)
-                .unwrap_or(false);
+            let class_hidden = attrs.get("class").and_then(hidden_class_token);
             let aria_hidden = attrs
                 .get("aria-hidden")
                 .map(|v| v.eq_ignore_ascii_case("true"))
@@ -12157,40 +12154,52 @@ fn remove_hidden_elements(document: &NodeRef, mut debug_removals: Option<&mut Ve
                 .map(|style| HIDDEN_STYLE_RE.is_match(style))
                 .unwrap_or(false);
 
-            if (hidden_attr || class_hidden || aria_hidden || style_hidden)
-                && (is_callout_content_node(node) || is_math_node(node))
-            {
+            let is_hidden = hidden_attr || class_hidden.is_some() || aria_hidden || style_hidden;
+
+            if is_hidden && (is_callout_content_node(node) || is_math_node(node)) {
                 return None;
             }
-            if (hidden_attr || class_hidden || aria_hidden || style_hidden)
-                && is_substantive_svg_node(node)
-            {
+            if is_hidden && is_substantive_svg_node(node) {
                 return None;
             }
-            if (hidden_attr || class_hidden || aria_hidden || style_hidden)
-                && is_inline_footnote_content_node(node)
-            {
+            if is_hidden && is_inline_footnote_content_node(node) {
                 return None;
             }
-            if (hidden_attr || class_hidden || aria_hidden || style_hidden)
-                && is_data_definition_footnote_content_node(node)
-            {
+            if is_hidden && is_data_definition_footnote_content_node(node) {
                 return None;
             }
             if aria_hidden && is_substantive_hidden_content(node) {
                 return None;
             }
 
-            (hidden_attr || class_hidden || aria_hidden || style_hidden).then(|| node.clone())
+            let reason = if style_hidden {
+                let style = attrs.get("style").unwrap_or_default().to_ascii_lowercase();
+                if style.contains("display") {
+                    "display:none".to_string()
+                } else if style.contains("visibility") {
+                    "visibility:hidden".to_string()
+                } else {
+                    "opacity:0".to_string()
+                }
+            } else if let Some(token) = class_hidden {
+                format!("class:{token}")
+            } else if attrs.contains("hidden") {
+                "attribute:hidden".to_string()
+            } else if attrs.contains("inert") {
+                "attribute:inert".to_string()
+            } else {
+                "aria-hidden:true".to_string()
+            };
+            is_hidden.then(|| (node.clone(), reason))
         })
         .collect();
 
-    for node in nodes {
+    for (node, reason) in nodes {
         record_debug_removal(
             &mut debug_removals,
             "removeHiddenElements",
             None,
-            Some("hidden element"),
+            Some(&reason),
             &node,
         );
         node.detach();
@@ -12345,13 +12354,14 @@ fn remove_element_class_tokens(element: &ElementData, remove: &[&str]) {
     }
 }
 
-fn is_hidden_class_value(class: &str) -> bool {
+fn hidden_class_token(class: &str) -> Option<&str> {
     let tokens = class.split_ascii_whitespace().collect::<Vec<_>>();
-    let has_plain_hidden = tokens
+    let plain_hidden = tokens
         .iter()
-        .any(|token| matches!(*token, "hidden" | "invisible"));
-    if has_plain_hidden {
-        return !tokens.iter().any(|token| {
+        .copied()
+        .find(|token| matches!(*token, "hidden" | "invisible"));
+    if let Some(plain_hidden) = plain_hidden {
+        let has_responsive_show = tokens.iter().any(|token| {
             let Some((prefix, utility)) = token.split_once(':') else {
                 return false;
             };
@@ -12371,9 +12381,10 @@ fn is_hidden_class_value(class: &str) -> bool {
                         | "flow-root"
                 )
         });
+        return (!has_responsive_show).then_some(plain_hidden);
     }
 
-    tokens.iter().any(|token| {
+    tokens.into_iter().find(|token| {
         let Some((prefix, utility)) = token.split_once(':') else {
             return false;
         };
@@ -12389,14 +12400,14 @@ fn remove_exact_noise(document: &NodeRef, mut debug_removals: Option<&mut Vec<De
                 if should_skip_exact_noise_node(&node) {
                     continue;
                 }
-                if handle_exact_noise_transform(&node, selector, debug_removals.as_deref_mut()) {
+                if handle_exact_noise_transform(&node) {
                     continue;
                 }
                 record_debug_removal(
                     &mut debug_removals,
                     "removeBySelector",
-                    Some(selector),
-                    Some("exact selector"),
+                    Some("exact"),
+                    Some("exact selector match"),
                     &node,
                 );
                 node.detach();
@@ -12439,15 +12450,15 @@ fn remove_conditional_exact_noise(
         })
         .collect::<Vec<_>>();
 
-    for (node, selector) in nodes {
+    for (node, _) in nodes {
         if should_skip_exact_noise_node(&node) {
             continue;
         }
         record_debug_removal(
             &mut debug_removals,
             "removeBySelector",
-            Some(selector),
-            Some("conditional exact selector"),
+            Some("exact"),
+            Some("exact selector match"),
             &node,
         );
         node.detach();
@@ -12778,24 +12789,13 @@ fn is_code_table_gutter_node(node: &NodeRef) -> bool {
     })
 }
 
-fn handle_exact_noise_transform(
-    node: &NodeRef,
-    selector: &str,
-    mut debug_removals: Option<&mut Vec<DebugRemoval>>,
-) -> bool {
+fn handle_exact_noise_transform(node: &NodeRef) -> bool {
     if tag_name(node).as_deref() != Some("button") {
         return false;
     }
 
     let media = button_media_nodes(node);
     if !media.is_empty() {
-        record_debug_removal(
-            &mut debug_removals,
-            "removeBySelector",
-            Some(selector),
-            Some("exact selector media button"),
-            node,
-        );
         for media_node in media {
             node.insert_before(media_node);
         }
@@ -12809,13 +12809,6 @@ fn handle_exact_noise_transform(
             "p", "li", "td", "th", "span", "h1", "h2", "h3", "h4", "h5", "h6",
         ],
     ) {
-        record_debug_removal(
-            &mut debug_removals,
-            "removeBySelector",
-            Some(selector),
-            Some("exact selector inline button"),
-            node,
-        );
         unwrap_node_children_before(node);
         return true;
     }
@@ -12864,7 +12857,7 @@ fn remove_partial_noise(document: &NodeRef, mut debug_removals: Option<&mut Vec<
     let Ok(matches) = document.select("*") else {
         return;
     };
-    let nodes: Vec<NodeRef> = matches
+    let nodes: Vec<(NodeRef, String)> = matches
         .filter_map(|m| {
             let node = m.as_node();
             if is_html_or_body_node(node) {
@@ -12880,10 +12873,10 @@ fn remove_partial_noise(document: &NodeRef, mut debug_removals: Option<&mut Vec<
             let id = partial_selector_id(&m);
             let fingerprint = partial_selector_fingerprint(&attrs, &id);
             if !fingerprint.is_empty() && EXPLICIT_NO_CONTENT_RE.is_match(&fingerprint) {
-                return Some(node.clone());
+                return Some((node.clone(), r"\bnocontent\b".to_string()));
             }
             if is_comment_widget_node(node) {
-                return Some(node.clone());
+                return Some((node.clone(), "comment".to_string()));
             }
             if is_signature_footer_node(node) {
                 return None;
@@ -12921,20 +12914,17 @@ fn remove_partial_noise(document: &NodeRef, mut debug_removals: Option<&mut Vec<
             if is_likely_content_container(node) || is_meaningful_content_subtree(node) {
                 return None;
             }
-            if partial_selector_noise_match(&attrs, &id) {
-                Some(node.clone())
-            } else {
-                None
-            }
+            partial_selector_noise_pattern(&attrs, &id).map(|pattern| (node.clone(), pattern))
         })
         .collect();
 
-    for node in nodes {
+    for (node, selector) in nodes {
+        let reason = format!("partial match: {selector}");
         record_debug_removal(
             &mut debug_removals,
             "removeBySelector",
-            None,
-            Some("partial selector"),
+            Some(&selector),
+            Some(&reason),
             &node,
         );
         node.detach();
@@ -23137,21 +23127,24 @@ fn partial_selector_fingerprint(attrs: &str, id: &str) -> String {
         .join(" ")
 }
 
-fn partial_selector_noise_match(attrs: &str, id: &str) -> bool {
+fn partial_selector_noise_pattern(attrs: &str, id: &str) -> Option<String> {
     let attrs = attrs.trim();
-    if !attrs.is_empty() && NOISE_ATTR_RE.is_match(attrs) {
-        return true;
+    if !attrs.is_empty() {
+        if let Some(matched) = NOISE_ATTR_RE.find(attrs) {
+            return Some(matched.as_str().to_ascii_lowercase());
+        }
     }
 
     let id = id.trim();
     if id.is_empty() {
-        return false;
+        return None;
     }
-    if partial_selector_id_has_delimiter(id) {
-        NOISE_ATTR_RE.is_match(id)
+    let matched = if partial_selector_id_has_delimiter(id) {
+        NOISE_ATTR_RE.find(id)
     } else {
-        NOISE_ATTR_ANCHORED_RE.is_match(id)
-    }
+        NOISE_ATTR_ANCHORED_RE.find(id)
+    }?;
+    Some(matched.as_str().to_ascii_lowercase())
 }
 
 fn partial_selector_id_has_delimiter(id: &str) -> bool {
@@ -31508,8 +31501,10 @@ Output: [0,1]</code></pre>
             <article class="post-content">
               <h1>Debug Options</h1>
               <p>The primary article paragraph should always remain in the extracted output.</p>
-              <p hidden>This hidden debug marker should be removed.</p>
+              <p style="display: none">This hidden debug marker should be removed.</p>
+              <p class="hidden">This hidden class marker should be removed.</p>
               <p>Exact marker: <span class="entry-meta">exact selector marker</span>.</p>
+              <p>Partial marker: <span class="related-widget">partial selector marker</span>.</p>
             </article>
           </body>
         </html>
@@ -31525,7 +31520,7 @@ Output: [0,1]</code></pre>
                 include_replies: IncludeReplies::Extractors,
                 remove_hidden_elements: true,
                 remove_exact_selectors: true,
-                remove_partial_selectors: false,
+                remove_partial_selectors: true,
                 remove_content_patterns: false,
                 remove_low_scoring: false,
                 standardize: true,
@@ -31544,11 +31539,24 @@ Output: [0,1]</code></pre>
             .removals
             .iter()
             .any(|removal| removal.step == "removeHiddenElements"
+                && removal.reason.as_deref() == Some("display:none")
                 && removal.text.contains("hidden debug marker")));
         assert!(debug.removals.iter().any(|removal| {
+            removal.step == "removeHiddenElements"
+                && removal.reason.as_deref() == Some("class:hidden")
+                && removal.text.contains("hidden class marker")
+        }));
+        assert!(debug.removals.iter().any(|removal| {
             removal.step == "removeBySelector"
-                && removal.selector.as_deref() == Some(".entry-meta")
+                && removal.selector.as_deref() == Some("exact")
+                && removal.reason.as_deref() == Some("exact selector match")
                 && removal.text.contains("exact selector marker")
+        }));
+        assert!(debug.removals.iter().any(|removal| {
+            removal.step == "removeBySelector"
+                && removal.selector.as_deref() == Some("related")
+                && removal.reason.as_deref() == Some("partial match: related")
+                && removal.text.contains("partial selector marker")
         }));
 
         let profile = output.profile.expect("profile should be present");

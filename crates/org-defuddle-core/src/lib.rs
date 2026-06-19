@@ -30,6 +30,58 @@ const UPSTREAM_PROFILE_STEPS: &[&str] = &[
     "resolveRelativeUrls",
 ];
 
+const UPSTREAM_STANDARDIZE_ALWAYS_PROFILE_STEPS: &[&str] = &[
+    "standardizeDropCaps",
+    "standardizeSpaces",
+    "removeHtmlComments",
+    "standardizeHeadings",
+    "wrapPreformattedCode",
+    "standardizeElements",
+    "resolveSvgColors",
+];
+
+const UPSTREAM_STANDARDIZE_PROFILE_STEPS: &[&str] = &[
+    "replaceCustomElements",
+    "convertDataAsSpans",
+    "convertBlockSpans",
+    "unwrapLayoutTables",
+    "flattenWrapperElements[1]",
+    "removePermalinkAnchors",
+    "stripUnwantedAttributes",
+    "unwrapBareSpans",
+    "unwrapSpecialLinks",
+    "removeObsoleteElements",
+    "removeEmptyElements",
+    "removeTrailingHeadings",
+    "removeOrphanedDividers[1]",
+    "flattenWrapperElements[2]",
+    "removeOrphanedDividers[2]",
+    "stripExtraBrElements",
+    "removeEmptyLines",
+];
+
+const UPSTREAM_STANDARDIZE_DEBUG_PROFILE_STEPS: &[&str] = &[
+    "stripUnwantedAttributes",
+    "removeTrailingHeadings",
+    "stripExtraBrElements",
+];
+
+const UPSTREAM_STANDARDIZE_ELEMENT_PROFILE_STEPS: &[&str] = &[
+    "se:wrapRawLatexDelimiters",
+    "se:convertLatexImages",
+    "se:img.latex[src*=\"latex.php\"],sp",
+    "se:pre, div[class*=\"prismjs\"], .s",
+    "se:h1, h2, h3, h4, h5, h6",
+    "se:picture",
+    "se:uni-image-full-width",
+    "se:img[data-src], img[data-srcset",
+    "se:span:has(img)",
+    "se:figure, p:has([class*=\"caption",
+    "se:div[data-testid^=\"paragraph\"],",
+    "se:div[role=\"list\"]",
+    "se:div[role=\"listitem\"]",
+];
+
 #[derive(Debug, Error)]
 pub enum DefuddleError {
     #[error("failed to serialize HTML: {0}")]
@@ -1008,7 +1060,7 @@ fn parse_html_to_org_once(
     html: &str,
     options: DefuddleOptions,
 ) -> Result<DefuddleOutput, DefuddleError> {
-    let mut profile = upstream_profile(options.profile);
+    let mut profile = upstream_profile(options.profile, options.standardize, options.debug);
     let step_start = Instant::now();
     let document = kuchiki::parse_html().one(html);
     record_profile(&mut profile, "cloneDocument", step_start);
@@ -1174,7 +1226,15 @@ fn parse_html_to_org_once(
     }
     let step_start = Instant::now();
     normalize_images(&document);
-    record_profile(&mut profile, "standardizeContent", step_start);
+    let elapsed = step_start.elapsed();
+    record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+    if options.standardize {
+        record_profile_elapsed(&mut profile, "standardizeElements", elapsed);
+        record_profile_elapsed(&mut profile, "resolveSvgColors", elapsed);
+        if !options.debug {
+            record_profile_elapsed(&mut profile, "removeObsoleteElements", elapsed);
+        }
+    }
     if options.remove_small_images {
         let step_start = Instant::now();
         remove_small_images(&document);
@@ -1204,7 +1264,11 @@ fn parse_html_to_org_once(
     remove_elementor_archive_chrome(&document);
     remove_webmention_chrome(&document);
     sanitize_links(&document);
+    let step_start = Instant::now();
     remove_heading_permalink_anchors(&document);
+    if options.standardize && !options.debug {
+        record_profile(&mut profile, "removePermalinkAnchors", step_start);
+    }
     let relative_base_url = document_base_url(&document, &metadata.url);
     let step_start = Instant::now();
     resolve_relative_urls(&document, &relative_base_url);
@@ -1216,7 +1280,11 @@ fn parse_html_to_org_once(
     record_profile(&mut profile, "removeEyebrowLabel", step_start);
     let step_start = Instant::now();
     remove_orphan_headings(&document);
-    record_profile(&mut profile, "standardizeContent", step_start);
+    let elapsed = step_start.elapsed();
+    record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+    if options.standardize {
+        record_profile_elapsed(&mut profile, "removeTrailingHeadings", elapsed);
+    }
 
     let step_start = Instant::now();
     if options.standardize {
@@ -1224,7 +1292,11 @@ fn parse_html_to_org_once(
         standardize_container_media_captions(&main);
         standardize_adjacent_media_captions(&main);
     }
-    record_profile(&mut profile, "standardizeContent", step_start);
+    let elapsed = step_start.elapsed();
+    record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+    if options.standardize {
+        record_profile_elapsed(&mut profile, "standardizeElements", elapsed);
+    }
 
     let step_start = Instant::now();
     let footnotes = if options.standardize {
@@ -1262,7 +1334,11 @@ fn parse_html_to_org_once(
     }
     let step_start = Instant::now();
     remove_orphan_headings(&main);
-    record_profile(&mut profile, "standardizeContent", step_start);
+    let elapsed = step_start.elapsed();
+    record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+    if options.standardize {
+        record_profile_elapsed(&mut profile, "removeTrailingHeadings", elapsed);
+    }
 
     if let Some(best_cover_url) = remove_cover_image_duplicate(&main, &metadata.image) {
         metadata.image = best_cover_url;
@@ -1491,10 +1567,33 @@ fn record_profile_elapsed(
     }
 }
 
-fn upstream_profile(enabled: bool) -> Option<HashMap<String, u64>> {
+fn upstream_profile(enabled: bool, standardize: bool, debug: bool) -> Option<HashMap<String, u64>> {
     enabled.then(|| {
+        let standardize_steps = if debug {
+            UPSTREAM_STANDARDIZE_DEBUG_PROFILE_STEPS
+        } else {
+            UPSTREAM_STANDARDIZE_PROFILE_STEPS
+        };
         UPSTREAM_PROFILE_STEPS
             .iter()
+            .chain(
+                standardize
+                    .then_some(UPSTREAM_STANDARDIZE_ALWAYS_PROFILE_STEPS)
+                    .into_iter()
+                    .flatten(),
+            )
+            .chain(
+                standardize
+                    .then_some(standardize_steps)
+                    .into_iter()
+                    .flatten(),
+            )
+            .chain(
+                standardize
+                    .then_some(UPSTREAM_STANDARDIZE_ELEMENT_PROFILE_STEPS)
+                    .into_iter()
+                    .flatten(),
+            )
             .map(|step| ((*step).to_string(), 0))
             .collect()
     })
@@ -32117,12 +32216,62 @@ Output: [0,1]</code></pre>
         let actual_steps = profile.keys().map(String::as_str).collect::<HashSet<_>>();
         let expected_steps = UPSTREAM_PROFILE_STEPS
             .iter()
+            .chain(UPSTREAM_STANDARDIZE_ALWAYS_PROFILE_STEPS)
+            .chain(UPSTREAM_STANDARDIZE_DEBUG_PROFILE_STEPS)
+            .chain(UPSTREAM_STANDARDIZE_ELEMENT_PROFILE_STEPS)
             .copied()
             .collect::<HashSet<_>>();
         assert_eq!(actual_steps, expected_steps);
+        assert_eq!(profile.len(), 39);
+        assert!(profile.contains_key("standardizeElements"));
+        assert!(profile.contains_key("se:picture"));
+        assert!(profile.contains_key("stripUnwantedAttributes"));
+        assert!(!profile.contains_key("replaceCustomElements"));
         assert!(profile
             .values()
             .all(|duration| *duration <= output.parse_time));
+    }
+
+    #[test]
+    fn profile_standardization_steps_follow_options() {
+        let html = r#"
+        <!doctype html>
+        <html><body><article><h1>Profile options</h1>
+        <p>The primary article paragraph is long enough for stable extraction.</p>
+        </article></body></html>
+        "#;
+
+        let normal = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                profile: true,
+                standardize: true,
+                debug: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap()
+        .profile
+        .unwrap();
+        assert_eq!(normal.len(), 53);
+        assert!(normal.contains_key("replaceCustomElements"));
+        assert!(normal.contains_key("removeEmptyLines"));
+        assert!(normal.contains_key("se:convertLatexImages"));
+
+        let unstandardized = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                profile: true,
+                standardize: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap()
+        .profile
+        .unwrap();
+        assert_eq!(unstandardized.len(), UPSTREAM_PROFILE_STEPS.len());
+        assert!(!unstandardized.contains_key("standardizeElements"));
+        assert!(!unstandardized.contains_key("se:picture"));
     }
 
     #[test]

@@ -20633,6 +20633,16 @@ impl MarkdownRenderer {
     }
 
     fn render_table(&mut self, node: &NodeRef) {
+        if markdown_table_has_spans(node) {
+            let html = markdown_clean_table_html(node);
+            if !html.trim().is_empty() {
+                self.ensure_blank_line();
+                self.out.push_str(html.trim());
+                self.out.push_str("\n\n");
+            }
+            return;
+        }
+
         let rows = direct_table_rows(node);
         if rows.is_empty() {
             return;
@@ -20802,6 +20812,94 @@ fn markdown_is_ltx_tag_item(node: &NodeRef) -> bool {
     tag_name(node).as_deref() == Some("span")
         && has_class_token(node, "ltx_tag")
         && has_class_token(node, "ltx_tag_item")
+}
+
+fn markdown_table_has_spans(node: &NodeRef) -> bool {
+    node.select("td, th")
+        .ok()
+        .into_iter()
+        .flatten()
+        .any(|cell| {
+            let attrs = cell.attributes.borrow();
+            attrs.contains("colspan") || attrs.contains("rowspan")
+        })
+}
+
+fn markdown_clean_table_html(node: &NodeRef) -> String {
+    let html = markdown_clean_html_node(node);
+    html.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+}
+
+fn markdown_clean_html_node(node: &NodeRef) -> String {
+    match node.data() {
+        NodeData::Text(text) => escape_html_text(&text.borrow()),
+        NodeData::Element(element) => {
+            let tag = element.name.local.as_ref();
+            let mut html = String::new();
+            html.push('<');
+            html.push_str(tag);
+            html.push_str(&markdown_clean_html_attrs(element));
+            html.push('>');
+            if markdown_void_html_tag(tag) {
+                return html;
+            }
+            for child in node.children() {
+                html.push_str(&markdown_clean_html_node(&child));
+            }
+            html.push_str("</");
+            html.push_str(tag);
+            html.push('>');
+            html
+        }
+        _ => node
+            .children()
+            .map(|child| markdown_clean_html_node(&child))
+            .collect::<String>(),
+    }
+}
+
+fn markdown_clean_html_attrs(element: &ElementData) -> String {
+    const ALLOWED: &[&str] = &[
+        "src", "href", "style", "align", "width", "height", "rowspan", "colspan", "bgcolor",
+        "scope", "valign", "headers",
+    ];
+
+    let attrs = element.attributes.borrow();
+    let mut rendered = Vec::new();
+    for (name, value) in attrs.map.iter() {
+        let local = name.local.as_ref().to_ascii_lowercase();
+        if ALLOWED.contains(&local.as_str()) {
+            rendered.push(format!(
+                r#" {}="{}""#,
+                local,
+                escape_html_attr(&value.value)
+            ));
+        }
+    }
+    rendered.sort();
+    rendered.concat()
+}
+
+fn markdown_void_html_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
 }
 
 fn markdown_footnote_backref(element: &ElementData) -> bool {
@@ -33408,6 +33506,24 @@ line break text.">
         assert!(escaped_pipe_header.contains("A \\| B"));
         assert!(escaped_pipe_header.contains("| --- | --- |"));
         assert!(!escaped_pipe_header.contains("| --- | --- | --- |"));
+
+        let complex_table = html_fragment_to_markdown(
+            r#"<article>
+              <table class="layout" data-ignore="x">
+                <tr><th colspan="2" class="wide">Heading</th></tr>
+                <tr><td rowspan="2" onclick="bad()">Left</td><td><a href="https://example.com">Right</a></td></tr>
+                <tr><td>Bottom</td></tr>
+              </table>
+            </article>"#,
+        );
+        assert!(complex_table.contains("<table>"));
+        assert!(complex_table.contains(r#"<th colspan="2">Heading</th>"#));
+        assert!(complex_table.contains(r#"<td rowspan="2">Left</td>"#));
+        assert!(complex_table.contains(r#"<a href="https://example.com">Right</a>"#));
+        assert!(!complex_table.contains("| --- |"));
+        assert!(!complex_table.contains("class="));
+        assert!(!complex_table.contains("data-ignore"));
+        assert!(!complex_table.contains("onclick"));
 
         let complex_link = html_fragment_to_markdown(
             r#"<article>

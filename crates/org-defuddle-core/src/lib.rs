@@ -2327,7 +2327,7 @@ fn extract_metadata(document: &NodeRef, provided_url: Option<&str>) -> Metadata 
         site_name
     };
 
-    let h1_title = select_text(document, "h1");
+    let h1_title = select_primary_metadata_h1_text(document);
     let raw_title = first_present(&[
         steam_event.as_ref().map(|event| event.title.clone()),
         meta_content(document, "property", "og:title"),
@@ -12282,6 +12282,38 @@ fn should_prefer_h1_title(raw_title: &str, h1: Option<&str>) -> bool {
     let raw_words = count_words(&raw_title);
     let h1_words = count_words(&h1);
     raw_words > 0 && raw_words <= 4 && h1_words >= raw_words + 4
+}
+
+fn select_primary_metadata_h1_text(document: &NodeRef) -> Option<String> {
+    let matches = document.select("h1").ok()?;
+    matches
+        .map(|matched| matched.as_node().clone())
+        .find(|node| !is_metadata_heading_hidden(node))
+        .map(|node| normalize_ws(&node.text_contents()))
+        .filter(|text| !text.is_empty())
+}
+
+fn is_metadata_heading_hidden(node: &NodeRef) -> bool {
+    node.ancestors()
+        .chain(std::iter::once(node.clone()))
+        .any(|candidate| {
+            let Some(element) = candidate.as_element() else {
+                return false;
+            };
+            let attrs = element.attributes.borrow();
+            let role = attrs.get("role").unwrap_or_default();
+            let style = attrs.get("style").unwrap_or_default();
+            attrs.contains("hidden")
+                || attrs.contains("inert")
+                || attrs
+                    .get("aria-hidden")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+                || attrs.get("class").and_then(hidden_class_token).is_some()
+                || HIDDEN_STYLE_RE.is_match(style)
+                || role.eq_ignore_ascii_case("dialog")
+                || role.eq_ignore_ascii_case("alertdialog")
+                || element.name.local.as_ref() == "dialog"
+        })
 }
 
 fn parse_english_date_to_utc(text: &str) -> Option<String> {
@@ -25030,6 +25062,13 @@ fn clean_title(title: &str, site: &str) -> String {
     let title = normalize_ws(title);
     if !site.is_empty() {
         for sep in [" | ", " / ", " · ", " - ", " – ", " — ", " :: "] {
+            if let Some((prefix, suffix)) = title.split_once(sep) {
+                if !suffix.trim().is_empty()
+                    && normalize_brand_key(prefix) == normalize_brand_key(site)
+                {
+                    return suffix.trim().to_string();
+                }
+            }
             let Some((prefix, suffix)) = title.rsplit_once(sep) else {
                 continue;
             };
@@ -27562,6 +27601,73 @@ mod tests {
             .org
             .contains("The issue body describes the extractor variable parity work."));
         assert!(!output.org.contains("metadata chrome"));
+    }
+
+    #[test]
+    fn generic_content_ignores_hidden_search_title_and_parent_repository_chrome() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <title>GitHub - owner/repo · GitHub</title>
+            <meta name="expected-hostname" content="github.com">
+            <meta property="og:title" content="GitHub - owner/repo">
+            <meta property="og:site_name" content="GitHub">
+            <meta name="author" content="owner">
+            <meta name="description" content="Repository description.">
+          </head>
+          <body>
+            <div role="dialog">
+              <h1 class="sr-only">Search code, repositories, users, issues, pull requests...</h1>
+            </div>
+            <main>
+              <div class="repository-file-list">
+                <h2>Folders and files</h2>
+                <p>Branches Tags Latest commit History View all files.</p>
+              </div>
+              <div class="repository-file-list-responsive-copy">
+                <h2>Folders and files</h2>
+                <p>Branches Tags Latest commit History View all files.</p>
+              </div>
+              <article class="markdown-body entry-content">
+                <h1>repo</h1>
+                <p>
+                  This README contains the substantive repository documentation.
+                  It explains the architecture, installation process, supported
+                  platforms, extraction behavior, compatibility requirements,
+                  verification strategy, release workflow, and maintenance rules.
+                  The paragraph is intentionally long enough to establish a real
+                  content boundary instead of a small navigation card.
+                </p>
+                <h1>Installation</h1>
+                <p>
+                  Install the package, download the matching native module, verify
+                  its checksum, restart the editor after an upgrade, and run the
+                  extraction command against a supported web page.
+                </p>
+              </article>
+            </main>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://github.com/owner/repo".to_string()),
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output.title, "owner/repo");
+        assert_eq!(output.author, "owner");
+        assert_eq!(output.site, "GitHub");
+        assert!(output.org.contains("substantive repository documentation"));
+        assert!(output.org.contains("Install the package"));
+        assert!(!output.org.contains("Search code, repositories"));
+        assert!(!output.org.contains("Folders and files"));
+        assert!(!output.org.contains("Latest commit"));
     }
 
     #[test]

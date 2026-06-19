@@ -89,9 +89,10 @@ Release binaries are published for:
 - ~x86_64-unknown-linux-gnu~
 - ~x86_64-pc-windows-msvc~
 
-The downloaded filename is normalized to ~liborg_defuddle_module~ plus the
-platform's ~module-file-suffix~.  Customize ~org-defuddle-module-file~ to use a
-different persistent location.
+The downloaded filename includes the pinned release version, for example
+~liborg_defuddle_module-v0.1.2.dylib~.  Versioned filenames prevent a package
+upgrade from silently loading an older native module.  Customize
+~org-defuddle-module-file~ to use a different persistent location.
 
 * Building From Source
 

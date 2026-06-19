@@ -52,6 +52,15 @@
               org-defuddle--module-version
               "/liborg-defuddle-aarch64-apple-darwin.dylib")))))
 
+(ert-deftest org-defuddle-test-installed-module-path-is-version-pinned ()
+  (let ((user-emacs-directory "/tmp/org-defuddle-emacs/")
+        (module-file-suffix ".dylib"))
+    (should
+     (equal
+      (org-defuddle--installed-module-file)
+      (concat user-emacs-directory "modules/liborg_defuddle_module-"
+              org-defuddle--module-version ".dylib")))))
+
 (ert-deftest org-defuddle-test-download-installs-and-loads-default-path ()
   (let* ((directory (make-temp-file "org-defuddle-module-" t))
          (org-defuddle-module-file

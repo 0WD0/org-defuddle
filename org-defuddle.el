@@ -106,7 +106,8 @@
 (defun org-defuddle--installed-module-file ()
   "Return the default per-user native module path."
   (expand-file-name
-   (concat "liborg_defuddle_module" module-file-suffix)
+   (concat "liborg_defuddle_module-" org-defuddle--module-version
+           module-file-suffix)
    (expand-file-name "modules" user-emacs-directory)))
 
 (defgroup org-defuddle nil

@@ -125,6 +125,25 @@ assets named ~org-defuddle-cli-<target>~.
 (org-defuddle-url-to-org "https://example.com/post")
 #+end_src
 
+By default, extracted Org opens in a temporary buffer.  Configure an optional
+note backend to create a Denote or Org-roam note instead:
+
+#+begin_src emacs-lisp
+;; Keep the default behavior.
+(setq org-defuddle-output-backend 'buffer)
+
+;; Or create a Denote note.
+(setq org-defuddle-output-backend 'denote)
+
+;; Or create an Org-roam note.
+(setq org-defuddle-output-backend 'org-roam)
+#+end_src
+
+Denote and Org-roam remain optional dependencies and are loaded only when their
+backend is selected.  Use ~org-defuddle-note-keywords~ for note tags and
+~org-defuddle-denote-directory~ or ~org-defuddle-org-roam-file-name~ to
+customize the destination.
+
 * CLI Usage
 
 The Rust CLI supports upstream-style ~parse~ options for URLs, local HTML

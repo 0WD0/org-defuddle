@@ -20,6 +20,12 @@
 (require 'url-parse)
 (require 'url-util)
 
+(declare-function denote "denote"
+                  (&optional title keywords file-type directory date template
+                             signature identifier))
+(declare-function org-roam-capture- "org-roam-capture" (&rest args))
+(declare-function org-roam-node-create "org-roam-node" (&rest args))
+
 (declare-function org-defuddle-module-parse-json "org-defuddle-module" (html url))
 (declare-function org-defuddle-module-parse-json-with-options
                   "org-defuddle-module"
@@ -142,6 +148,35 @@ specific API helper requests use the CLI fetch subcommand when it is
 available, and fall back to Emacs `url-retrieve' if the fetch process
 fails."
   :type 'boolean
+  :group 'org-defuddle)
+
+(defcustom org-defuddle-output-backend 'buffer
+  "Where completed Org extraction results are delivered.
+
+The default `buffer' preserves the existing behavior.  `denote' creates an
+Org note through Denote, while `org-roam' creates one through Org-roam.  The
+selected package is loaded only when its backend is used."
+  :type '(choice (const :tag "Temporary Org buffer" buffer)
+                 (const :tag "Denote note" denote)
+                 (const :tag "Org-roam note" org-roam))
+  :group 'org-defuddle)
+
+(defcustom org-defuddle-note-keywords nil
+  "Keywords assigned to notes created by a note output backend."
+  :type '(repeat string)
+  :group 'org-defuddle)
+
+(defcustom org-defuddle-denote-directory nil
+  "Denote directory used for extracted notes.
+
+When nil, use Denote's configured default directory."
+  :type '(choice (const :tag "Denote default" nil) directory)
+  :group 'org-defuddle)
+
+(defcustom org-defuddle-org-roam-file-name
+  "%<%Y%m%d%H%M%S>-${slug}.org"
+  "Org-roam capture target used for extracted notes."
+  :type 'string
   :group 'org-defuddle)
 
 (defcustom org-defuddle-include-images t
@@ -875,12 +910,70 @@ HEADERS, METHOD, and DATA configure the request."
              (message "org-defuddle CLI failed: %s"
                       (string-trim (or output ""))))))))))
 
-(defun org-defuddle--insert-org-buffer (org)
-  "Insert ORG into a new Org buffer and display it."
+(defun org-defuddle--org-title (org)
+  "Return the first headline title from ORG."
+  (if (string-match "\\`[[:space:]]*\\*+[ \t]+\\([^\n]+\\)" org)
+      (string-trim (match-string 1 org))
+    "Web capture"))
+
+(defun org-defuddle--insert-temporary-org-buffer (org)
+  "Insert ORG into a new temporary Org buffer and display it."
   (with-current-buffer (generate-new-buffer "*org-defuddle*")
     (insert org)
     (org-mode)
     (pop-to-buffer (current-buffer))))
+
+(defun org-defuddle--insert-denote-note (org)
+  "Create and display a Denote note containing ORG."
+  (unless (require 'denote nil t)
+    (user-error "Denote is not installed"))
+  (let* ((title (org-defuddle--org-title org))
+         (path (denote title
+                       org-defuddle-note-keywords
+                       'org
+                       org-defuddle-denote-directory))
+         (buffer (find-file-noselect path)))
+    (with-current-buffer buffer
+      (goto-char (point-max))
+      (unless (bolp)
+        (insert "\n"))
+      (insert "\n" org)
+      (save-buffer))
+    (pop-to-buffer buffer)))
+
+(defun org-defuddle--insert-org-roam-note (org)
+  "Create and display an Org-roam note containing ORG."
+  (unless (require 'org-roam-capture nil t)
+    (user-error "Org-roam is not installed"))
+  (let* ((title (org-defuddle--org-title org))
+         (content (replace-regexp-in-string "%" "%%" org t t))
+         (template
+          (list
+           (list "d" "org-defuddle" 'plain
+                 (list 'function (lambda () content))
+                 :target
+                 (list 'file+head
+                       org-defuddle-org-roam-file-name
+                       "#+title: ${title}\n#+filetags: ${org-defuddle-tags}\n\n")
+                 :immediate-finish t
+                 :jump-to-captured t
+                 :unnarrowed t))))
+    (org-roam-capture-
+     :node (org-roam-node-create :title title)
+     :info (list :org-defuddle-tags
+                 (mapconcat (lambda (keyword) (format ":%s:" keyword))
+                            org-defuddle-note-keywords
+                            ""))
+     :templates template)))
+
+(defun org-defuddle--insert-org-buffer (org)
+  "Deliver ORG according to `org-defuddle-output-backend'."
+  (pcase org-defuddle-output-backend
+    ('buffer (org-defuddle--insert-temporary-org-buffer org))
+    ('denote (org-defuddle--insert-denote-note org))
+    ('org-roam (org-defuddle--insert-org-roam-note org))
+    (_ (user-error "Unsupported org-defuddle output backend: %S"
+                   org-defuddle-output-backend))))
 
 (defun org-defuddle-parse-html (html &optional url options)
   "Parse HTML and return a plist containing extracted metadata and Org.
@@ -1307,12 +1400,8 @@ the same keys as `org-defuddle-parse-html'."
   (when (called-interactively-p 'interactive)
     (org-defuddle-load-module t))
   (let* ((html (buffer-substring-no-properties (point-min) (point-max)))
-         (org (org-defuddle-html-to-org html url options))
-         (buffer (generate-new-buffer "*org-defuddle*")))
-    (with-current-buffer buffer
-      (insert org)
-      (org-mode))
-    (pop-to-buffer buffer)))
+         (org (org-defuddle-html-to-org html url options)))
+    (org-defuddle--insert-org-buffer org)))
 
 (defun org-defuddle--html-url-to-org (url options)
   "Fetch URL as HTML and insert extracted Org using OPTIONS."

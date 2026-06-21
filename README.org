@@ -659,6 +659,9 @@ Implemented:
   pronunciation span preservation.
 - Selected Hacker News extraction for story comment pages, direct comment
   permalinks, and listing pages.
+- Selected GNU Debbugs bugreport extraction for mailing-list archive pages,
+  including bug metadata, per-message Org headings, mail headers as properties,
+  preformatted message bodies, attachment markers, and tracker-noise removal.
 - Selected GitHub issue and pull-request extraction, including rendered Markdown
   bodies, PR review/conversation comments, and GitHub chrome removal.
 - Selected LinkedIn post extraction, including top-level commentary, media/video

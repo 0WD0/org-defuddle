@@ -1088,6 +1088,9 @@ fn parse_html_to_org_once(
     if let Some(output) = grok_output(&document, options.url.as_deref(), options.include_images)? {
         return Ok(output);
     }
+    if let Some(output) = debbugs_output(&document, options.url.as_deref())? {
+        return Ok(output);
+    }
     if let Some(output) = bluesky_output(
         &document,
         options.url.as_deref(),
@@ -2449,6 +2452,391 @@ fn extract_metadata(document: &NodeRef, provided_url: Option<&str>) -> Metadata 
             .or_else(|| meta_content(document, "http-equiv", "content-language"))
             .unwrap_or_default(),
     }
+}
+
+fn debbugs_output(
+    document: &NodeRef,
+    provided_url: Option<&str>,
+) -> Result<Option<DefuddleOutput>, DefuddleError> {
+    if !is_debbugs_document(document, provided_url) {
+        return Ok(None);
+    }
+
+    let mut metadata = extract_metadata(document, provided_url);
+    metadata.site = "GNU Debbugs".to_string();
+    metadata.domain = provided_url
+        .and_then(|url| Url::parse(url).ok())
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "debbugs.gnu.org".to_string());
+    metadata.title = debbugs_title(document).unwrap_or_else(|| metadata.title.clone());
+    metadata.author = debbugs_reported_by(document).unwrap_or_default();
+    metadata.published = debbugs_bug_field(document, "Date:").unwrap_or_default();
+    metadata.description = debbugs_description(document);
+
+    let base_url = provided_url
+        .filter(|url| !url.trim().is_empty())
+        .unwrap_or("https://debbugs.gnu.org/");
+    let messages = debbugs_messages(document, base_url);
+    if messages.is_empty() {
+        return Ok(None);
+    }
+
+    let mut body = String::new();
+    if let Some(package) = debbugs_bug_field(document, "Package:") {
+        body.push_str(&format!("- Package :: {package}\n"));
+    }
+    if let Some(severity) = debbugs_bug_field(document, "Severity:") {
+        body.push_str(&format!("- Severity :: {severity}\n"));
+    }
+    if let Some(tags) = debbugs_bug_field(document, "Tags:") {
+        body.push_str(&format!("- Tags :: {tags}\n"));
+    }
+    if let Some(done) = debbugs_bug_field(document, "Done:") {
+        body.push_str(&format!("- Done :: {done}\n"));
+    }
+    if !body.is_empty() {
+        body.push('\n');
+    }
+
+    for message in &messages {
+        body.push_str(&message.to_org());
+    }
+
+    let word_count = count_words(&body);
+    let org = build_org_document(&metadata, &body, word_count);
+    Ok(Some(DefuddleOutput {
+        title: metadata.title.clone(),
+        description: metadata.description.clone(),
+        author: metadata.author.clone(),
+        published: metadata.published.clone(),
+        site: metadata.site.clone(),
+        url: metadata.url.clone(),
+        domain: metadata.domain.clone(),
+        favicon: metadata.favicon.clone(),
+        image: metadata.image.clone(),
+        language: metadata.language.clone(),
+        word_count,
+        parse_time: 0,
+        html: serialize_node(document)?,
+        org,
+        content_markdown: String::new(),
+        frontmatter: String::new(),
+        extractor_type: extractor_type("debbugs"),
+        variables: metadata_variables(&metadata, &["title", "author", "published", "site"]),
+        debug: None,
+        profile: None,
+    }))
+}
+
+#[derive(Debug, Default)]
+struct DebbugsMessage {
+    number: String,
+    received: String,
+    from: String,
+    to: String,
+    cc: String,
+    subject: String,
+    date: String,
+    body: String,
+    attachments: Vec<DebbugsAttachment>,
+}
+
+impl DebbugsMessage {
+    fn to_org(&self) -> String {
+        let title = if self.subject.trim().is_empty() {
+            format!("Message #{}", self.number)
+        } else {
+            format!(
+                "Message #{}: {}",
+                self.number,
+                escape_org_headline(self.subject.trim())
+            )
+        };
+        let mut out = String::new();
+        out.push_str("** ");
+        out.push_str(&title);
+        out.push('\n');
+        out.push_str(":PROPERTIES:\n");
+        push_property(&mut out, "FROM", &self.from);
+        push_property(&mut out, "TO", &self.to);
+        push_property(&mut out, "CC", &self.cc);
+        push_property(&mut out, "SUBJECT", &self.subject);
+        push_property(&mut out, "DATE", &self.date);
+        push_property(&mut out, "RECEIVED", &self.received);
+        out.push_str(":END:\n\n");
+        if !self.body.trim().is_empty() {
+            out.push_str(&org_example_block(&self.body));
+            out.push('\n');
+        }
+        for attachment in &self.attachments {
+            out.push_str("- Attachment :: ");
+            out.push_str(&attachment.to_org());
+            out.push('\n');
+        }
+        out.push('\n');
+        out
+    }
+}
+
+fn is_debbugs_document(document: &NodeRef, provided_url: Option<&str>) -> bool {
+    let url_matches = provided_url
+        .and_then(|url| Url::parse(url).ok())
+        .is_some_and(|url| {
+            url.host_str()
+                .is_some_and(|host| host.eq_ignore_ascii_case("debbugs.gnu.org"))
+                && url.path().ends_with("/cgi/bugreport.cgi")
+        });
+    url_matches
+        || (select_text(document, "title")
+            .is_some_and(|title| title.contains("GNU bug report logs"))
+            && count_selector(document, "p.msgreceived") > 0
+            && count_selector(document, "pre.headers") > 0)
+}
+
+fn debbugs_title(document: &NodeRef) -> Option<String> {
+    select_text(document, "h1")
+        .or_else(|| select_text(document, "title"))
+        .map(|title| normalize_ws(&title))
+}
+
+fn debbugs_reported_by(document: &NodeRef) -> Option<String> {
+    debbugs_info_field(document, ".buginfo p", "Reported by:")
+}
+
+fn debbugs_bug_field(document: &NodeRef, label: &str) -> Option<String> {
+    debbugs_info_field(document, ".pkginfo p", label)
+        .or_else(|| debbugs_info_field(document, ".buginfo p", label))
+}
+
+fn debbugs_info_field(document: &NodeRef, selector: &str, label: &str) -> Option<String> {
+    let matches = document.select(selector).ok()?;
+    for matched in matches {
+        let text = normalize_ws(&matched.as_node().text_contents());
+        if let Some(value) = text.strip_prefix(label) {
+            let value = debbugs_clean_info_value(value);
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn debbugs_description(document: &NodeRef) -> String {
+    let mut parts = Vec::new();
+    for label in ["Package:", "Severity:", "Tags:", "Done:"] {
+        if let Some(value) = debbugs_bug_field(document, label) {
+            parts.push(format!("{} {}", label.trim_end_matches(':'), value));
+        }
+    }
+    parts.join("; ")
+}
+
+fn debbugs_messages(document: &NodeRef, base_url: &str) -> Vec<DebbugsMessage> {
+    let Ok(matches) = document.select("p.msgreceived") else {
+        return Vec::new();
+    };
+    matches
+        .filter_map(|matched| debbugs_message(matched.as_node(), base_url))
+        .collect()
+}
+
+#[derive(Debug, Default)]
+struct DebbugsAttachment {
+    name: String,
+    url: String,
+    details: String,
+}
+
+impl DebbugsAttachment {
+    fn to_org(&self) -> String {
+        if self.url.is_empty() {
+            return debbugs_clean_mime_marker(&self.details);
+        }
+        let label = if self.name.trim().is_empty() {
+            self.url.as_str()
+        } else {
+            self.name.trim()
+        };
+        let mut out = format!(
+            "[[{}][{}]]",
+            escape_link(&self.url),
+            escape_link_text(label)
+        );
+        if !self.details.trim().is_empty() {
+            out.push(' ');
+            out.push_str(self.details.trim());
+        }
+        out
+    }
+}
+
+fn debbugs_message(received_node: &NodeRef, base_url: &str) -> Option<DebbugsMessage> {
+    let received = normalize_ws(&received_node.text_contents());
+    let captures = DEBBUGS_MESSAGE_RE.captures(&received)?;
+    let mut message = DebbugsMessage {
+        number: captures
+            .get(1)
+            .map(|m| m.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        received: captures
+            .get(2)
+            .map(|m| normalize_ws(m.as_str()))
+            .unwrap_or(received),
+        ..DebbugsMessage::default()
+    };
+
+    let mut cursor = received_node.next_sibling();
+    while let Some(node) = cursor {
+        if debbugs_is_message_boundary(&node) {
+            break;
+        }
+        if matches!(tag_name(&node).as_deref(), Some("pre")) {
+            let class = element_attr(&node, "class").unwrap_or_default();
+            match class.as_str() {
+                "headers" => debbugs_parse_headers(&mut message, &node.text_contents()),
+                "message" => {
+                    let text = node.text_contents();
+                    if !text.trim().is_empty() {
+                        if !message.body.trim().is_empty() {
+                            message.body.push_str("\n\n");
+                        }
+                        message.body.push_str(text.trim());
+                    }
+                }
+                "mime" => {
+                    let text = normalize_ws(&node.text_contents());
+                    if text.to_ascii_lowercase().contains("attachment") {
+                        message
+                            .attachments
+                            .push(debbugs_attachment(&node, base_url, &text));
+                    }
+                }
+                _ => {}
+            }
+        }
+        cursor = node.next_sibling();
+    }
+
+    Some(message)
+}
+
+fn debbugs_is_message_boundary(node: &NodeRef) -> bool {
+    if matches!(tag_name(node).as_deref(), Some("hr")) {
+        return true;
+    }
+    let Some(element) = node.as_element() else {
+        return false;
+    };
+    let class = element
+        .attributes
+        .borrow()
+        .get("class")
+        .unwrap_or_default()
+        .to_string();
+    class.split_ascii_whitespace().any(|token| {
+        matches!(
+            token,
+            "msgreceived" | "infmessage" | "msgsent" | "msgnotification"
+        )
+    })
+}
+
+fn debbugs_attachment(node: &NodeRef, base_url: &str, text: &str) -> DebbugsAttachment {
+    let name = select_text(node, "a").unwrap_or_default();
+    let url = select_attr_from(node, "a[href]", "href")
+        .and_then(|href| absolutize_url(Some(base_url), &href))
+        .unwrap_or_default();
+    let marker = debbugs_clean_mime_marker(text);
+    let details = if !name.is_empty() {
+        marker
+            .strip_prefix(&name)
+            .map(str::trim)
+            .unwrap_or(marker.as_str())
+            .to_string()
+    } else {
+        marker
+    };
+    DebbugsAttachment { name, url, details }
+}
+
+fn debbugs_clean_info_value(value: &str) -> String {
+    normalize_ws(value).trim_end_matches(';').trim().to_string()
+}
+
+fn debbugs_clean_mime_marker(text: &str) -> String {
+    text.trim()
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or_else(|| text.trim())
+        .to_string()
+}
+
+fn debbugs_parse_headers(message: &mut DebbugsMessage, headers: &str) {
+    let mut current = String::new();
+    for line in headers.lines() {
+        if let Some((key, value)) = line.split_once(':') {
+            let normalized_key = key.trim().to_ascii_lowercase();
+            if matches!(
+                normalized_key.as_str(),
+                "from" | "to" | "cc" | "subject" | "date"
+            ) {
+                current = normalized_key;
+                debbugs_set_header(message, &current, value.trim());
+                continue;
+            }
+        }
+        if !current.is_empty() && line.starts_with(char::is_whitespace) {
+            debbugs_append_header(message, &current, line.trim());
+        }
+    }
+}
+
+fn debbugs_set_header(message: &mut DebbugsMessage, key: &str, value: &str) {
+    match key {
+        "from" => message.from = value.to_string(),
+        "to" => message.to = value.to_string(),
+        "cc" => message.cc = value.to_string(),
+        "subject" => message.subject = value.to_string(),
+        "date" => message.date = value.to_string(),
+        _ => {}
+    }
+}
+
+fn debbugs_append_header(message: &mut DebbugsMessage, key: &str, value: &str) {
+    if value.is_empty() {
+        return;
+    }
+    let target = match key {
+        "from" => &mut message.from,
+        "to" => &mut message.to,
+        "cc" => &mut message.cc,
+        "subject" => &mut message.subject,
+        "date" => &mut message.date,
+        _ => return,
+    };
+    if !target.is_empty() {
+        target.push(' ');
+    }
+    target.push_str(value);
+}
+
+static DEBBUGS_MESSAGE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"Message #(\d+) received at ([^(]+)").expect("valid debbugs message regex")
+});
+
+fn org_example_block(text: &str) -> String {
+    let mut out = String::from("#+begin_example\n");
+    for line in text.trim().lines() {
+        if line.trim_start().starts_with("#+end_example") {
+            out.push(',');
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("#+end_example\n");
+    out
 }
 
 fn hacker_news_output(

@@ -2852,6 +2852,87 @@ fn all_upstream_fixture_content_matches_exact_org_rendering() {
     );
 }
 
+#[test]
+fn debbugs_bugreport_is_rendered_as_mail_archive() {
+    let html = r##"<!doctype html>
+<html>
+<head><title>#70820 - [PATCH] Editable grep buffers - GNU bug report logs</title></head>
+<body>
+<h1>GNU bug report logs - <br>#70820<br>[PATCH] Editable grep buffers</h1>
+<div class="pkginfo"><p>Package: <a>emacs</a>;</p></div>
+<div class="buginfo">
+  <p>Reported by: <a>Visuwesh &lt;visuweshm &lt;at&gt; gmail.com&gt;</a></p>
+  <p>Date: Tue, 7 May 2024 16:26:01 UTC</p>
+  <p>Severity: normal</p>
+  <p>Tags: patch</p>
+  <p><strong>Done:</strong> Eli Zaretskii &lt;eliz &lt;at&gt; gnu.org&gt;</p>
+</div>
+<div class="infmessage"><strong>Information forwarded</strong> to <code>bug-gnu-emacs</code></div>
+<hr><p class="msgreceived"><a name="msg5"></a><a href="#5">Message #5</a> received at submit &lt;at&gt; debbugs.gnu.org (<a href="bugreport.cgi?bug=70820;msg=5">full text</a>, <a href="bugreport.cgi?bug=70820;msg=5;mbox=yes">mbox</a>):</p>
+<pre class="headers"><b>From:</b> Visuwesh &lt;visuweshm &lt;at&gt; gmail.com&gt;
+<b>To:</b> bug-gnu-emacs &lt;at&gt; gnu.org
+<b>Subject:</b> [PATCH] Editable grep buffers
+<b>Date:</b> Tue, 07 May 2024 21:55:09 +0530</pre>
+<pre class="mime">[<a href="bugreport.cgi?msg=5;att=0">Message part 1</a> (text/plain, inline)]</pre>
+<pre class="message">Tags: patch
+
+Attached patch is a proof of concept for an occur-edit-mode alike for
+*grep* buffers.
+</pre>
+<pre class="mime">[<a href="bugreport.cgi?att=1;msg=5;filename=grep-edit.diff">grep-edit.diff</a> (text/patch, attachment)]</pre>
+<hr><p class="msgreceived"><a name="msg8"></a><a href="#8">Message #8</a> received at 70820 &lt;at&gt; debbugs.gnu.org (<a href="bugreport.cgi?bug=70820;msg=8">full text</a>, <a href="bugreport.cgi?bug=70820;msg=8;mbox=yes">mbox</a>):</p>
+<pre class="headers"><b>From:</b> Jim Porter &lt;jporterbugs &lt;at&gt; gmail.com&gt;
+<b>To:</b> Visuwesh &lt;visuweshm &lt;at&gt; gmail.com&gt;, 70820 &lt;at&gt; debbugs.gnu.org
+<b>Subject:</b> Re: bug#70820: [PATCH] Editable grep buffers
+<b>Date:</b> Tue, 7 May 2024 10:23:30 -0700</pre>
+<pre class="message">How does this compare to the existing wgrep package?</pre>
+</body>
+</html>"##;
+
+    let output = parse_html_to_org(
+        html,
+        DefuddleOptions {
+            url: Some("https://debbugs.gnu.org/cgi/bugreport.cgi?bug=70820".to_string()),
+            include_images: true,
+            remove_small_images: true,
+            content_selector: None,
+            include_replies: IncludeReplies::Extractors,
+            remove_hidden_elements: true,
+            remove_exact_selectors: true,
+            remove_partial_selectors: true,
+            remove_content_patterns: true,
+            remove_low_scoring: true,
+            standardize: true,
+            debug: false,
+            profile: false,
+            frontmatter: false,
+            markdown: false,
+            separate_markdown: false,
+        },
+    )
+    .expect("debbugs extraction should succeed");
+
+    assert_eq!(output.extractor_type.as_deref(), Some("debbugs"));
+    assert!(output
+        .org
+        .contains("** Message #5: [PATCH] Editable grep buffers"));
+    assert!(output
+        .org
+        .contains(":FROM: Visuwesh <visuweshm <at> gmail.com>"));
+    assert!(output.org.contains("#+begin_example\nTags: patch"));
+    assert!(output.org.contains(
+        "- Attachment :: [[https://debbugs.gnu.org/cgi/bugreport.cgi?att=1;msg=5;filename=grep-edit.diff][grep-edit.diff]] (text/patch, attachment)"
+    ));
+    assert!(output
+        .org
+        .contains("** Message #8: Re: bug#70820: [PATCH] Editable grep buffers"));
+    assert!(output
+        .org
+        .contains("How does this compare to the existing wgrep package?"));
+    assert!(!output.org.contains("Information forwarded"));
+    assert!(!output.org.contains("#+begin_src"));
+}
+
 fn upstream_fixture_names(defuddle_dir: &std::path::Path) -> Vec<String> {
     snapshot_names(&defuddle_dir.join("tests").join("fixtures"), "html")
 }

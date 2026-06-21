@@ -1,7 +1,7 @@
 * arXiv Equation Tables
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 71
+:WORD_COUNT: 29
 :END:
 
 ** Scaled Dot-Product Attention

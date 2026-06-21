@@ -1,7 +1,7 @@
 * Sample Technical Post
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 89
+:WORD_COUNT: 77
 :END:
 
 *** A typical solution

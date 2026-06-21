@@ -11,3 +11,8 @@ edition = "2021"
 license = "MIT"
 repository = "https://github.com/luciuschen/org-defuddle"
 rust-version = "1.80"
+
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1

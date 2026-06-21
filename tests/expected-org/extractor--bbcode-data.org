@@ -4,7 +4,7 @@
 :AUTHOR: Example Game
 :PUBLISHED: 2025-01-15T12:00:00.000Z
 :DOMAIN: store.example.com
-:WORD_COUNT: 32
+:WORD_COUNT: 31
 :END:
 
 Patch 1.2.3 is now live! This is build 500, network compatible. Available on all platforms! You can read the [[https://docs.example.com/patch-123][full patch notes here]].

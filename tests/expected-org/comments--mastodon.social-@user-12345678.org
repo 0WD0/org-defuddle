@@ -8,7 +8,7 @@
 :DESCRIPTION: This is a sample post about something interesting. Check out this link!
 :IMAGE: https://cdn.mastodon.example/media/original/sample-image.png
 :LANGUAGE: en
-:WORD_COUNT: 163
+:WORD_COUNT: 76
 :END:
 
 This is a sample post about something interesting. Check out this link!

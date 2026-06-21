@@ -1,7 +1,7 @@
 * Linguist, an ultimate browser extension for translation
 :PROPERTIES:
 :PUBLISHED: 2023-07-13T00:00:00+00:00
-:WORD_COUNT: 72
+:WORD_COUNT: 73
 :END:
 
 The web browser is the most used program on any desktop. And many users regularly visit sites in foreign languages.

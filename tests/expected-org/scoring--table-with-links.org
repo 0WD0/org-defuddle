@@ -1,6 +1,6 @@
 * Model Comparison Table
 :PROPERTIES:
-:WORD_COUNT: 100
+:WORD_COUNT: 84
 :END:
 
 ** Model Comparison

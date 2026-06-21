@@ -2,7 +2,7 @@
 :PROPERTIES:
 :AUTHOR: Test Author
 :SITE: Test Author
-:WORD_COUNT: 106
+:WORD_COUNT: 108
 :END:
 
 ** Health care subsidies at risk in shutdown

@@ -7,7 +7,7 @@
 :DESCRIPTION: This is the main note content on the permalink page.
 :IMAGE: https://example.com/image/main-note.jpg
 :LANGUAGE: en
-:WORD_COUNT: 23
+:WORD_COUNT: 17
 :END:
 
 This is the main note content on the permalink page.

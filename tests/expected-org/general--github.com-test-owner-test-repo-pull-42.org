@@ -6,7 +6,7 @@
 :SITE: GitHub - test-owner/test-repo
 :DOMAIN: github.com
 :LANGUAGE: en
-:WORD_COUNT: 123
+:WORD_COUNT: 120
 :END:
 
 ** Summary

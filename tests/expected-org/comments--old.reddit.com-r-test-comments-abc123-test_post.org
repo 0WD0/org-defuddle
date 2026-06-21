@@ -6,7 +6,7 @@
 :SITE: r/test
 :DOMAIN: old.reddit.com
 :DESCRIPTION: This is the post body with some content.
-:WORD_COUNT: 117
+:WORD_COUNT: 70
 :END:
 
 This is the post body with some content.

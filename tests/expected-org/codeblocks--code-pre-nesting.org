@@ -4,7 +4,7 @@
 :SITE: Example Docs
 :DOMAIN: example.com
 :DESCRIPTION: Get started quickly.
-:WORD_COUNT: 38
+:WORD_COUNT: 39
 :END:
 
 Install the package and run your first job:

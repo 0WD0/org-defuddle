@@ -1,6 +1,6 @@
 * pulldown-cmark footnote-definition
 :PROPERTIES:
-:WORD_COUNT: 110
+:WORD_COUNT: 112
 :END:
 
 ** Example post with a footnote

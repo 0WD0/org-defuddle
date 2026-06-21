@@ -5,7 +5,7 @@
 :DOMAIN: example.com
 :DESCRIPTION: Example is a company building software.
 :LANGUAGE: en
-:WORD_COUNT: 81
+:WORD_COUNT: 79
 :END:
 
 From: Example <hello@example.com>

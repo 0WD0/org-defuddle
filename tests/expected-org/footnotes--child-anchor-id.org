@@ -1,7 +1,7 @@
 * Anchor-ID Footnote Pattern
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 141
+:WORD_COUNT: 155
 :END:
 
 The first contribution was a foundational sorting algorithm [fn:1] that became widely used. It relied on a partitioning technique [fn:2] described in an earlier paper.

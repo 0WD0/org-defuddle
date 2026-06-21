@@ -1,7 +1,7 @@
 * arXiv Cross-References
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 36
+:WORD_COUNT: 35
 :END:
 
 ** Model Architecture

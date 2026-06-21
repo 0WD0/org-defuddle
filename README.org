@@ -62,6 +62,9 @@ Requirements:
 - Emacs 27.1 or newer with dynamic module support.
 - macOS, GNU/Linux, or Windows on a supported architecture.
 
+GNU/Linux release binaries are built on Ubuntu 20.04 and require glibc 2.31 or
+newer.
+
 Install the Elisp package from the repository, then run an interactive
 org-defuddle command:
 
@@ -392,6 +395,10 @@ exact expected and actual Org for one mismatch.
 
 Known remaining gaps:
 
+- The 202-fixture completion gate proves canonical Org content, not identical
+  intermediate HTML. Several site extractors still retain a wider DOM container
+  than upstream's canonical ~contentHtml~, so serialized ~html~ and
+  ~wordCount~ are not yet an exact parity contract.
 - Org is the canonical output. First-pass Markdown exists only for upstream
   compatibility through ~contentMarkdown~, ~separateMarkdown~,
   ~:separate-markdown~, and CLI ~--separate-markdown~/~--markdown~; full
@@ -632,9 +639,9 @@ Implemented:
   partial-selector retries below 200 words, hidden-element retries below 50
   words, largest-hidden-subtree direct selector retries for hidden runtime
   article caches, and index/listing retries without low scoring, partial
-  selectors, and optionally content-pattern cleanup. Retries keep short focused
-  articles unless the fallback gains enough content to match upstream
-  replacement thresholds and does not introduce known trailing page chrome.
+  selectors, and content-pattern cleanup. High-confidence comment widgets are
+  also removed in selector cleanup so those retries do not restore reader
+  comment chrome.
 - Selected schema.org text fallback: when ~articleBody~ or ~text~ contains
   substantially more content than the scored extraction, the core uses the
   matching DOM content container or falls back to the schema text. Matching
@@ -811,8 +818,7 @@ Implemented:
   footnote/sidenote labels. It preserves guarded math scripts, source-backed
   audio/video, gradient ad content, and callout asides. Partial selector
   cleanup includes all 542 patterns from the inspected upstream snapshot in
-  source order, followed by the 20 broader patterns previously supported by
-  org-defuddle. It follows upstream code-block, main-content ancestor, heading,
+  source order. It follows upstream code-block, main-content ancestor, heading,
   negative-lookbehind, footnote, math, and id guards. Main content is selected
   before selector cleanup, matching the upstream pipeline, so noise removal
   cannot change the selected content candidate or detach its ancestors.

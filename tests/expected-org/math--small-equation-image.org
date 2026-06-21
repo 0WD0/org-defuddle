@@ -1,7 +1,7 @@
 * Small equation images
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 31
+:WORD_COUNT: 86
 :END:
 
 You can obtain all the elementary functions from just the function

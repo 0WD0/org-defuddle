@@ -1,7 +1,7 @@
 * Whitespace and newline handling
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 78
+:WORD_COUNT: 65
 :END:
 
 ** Newlines in paragraphs

@@ -1,6 +1,6 @@
 * Equation cross-references should not become footnotes
 :PROPERTIES:
-:WORD_COUNT: 77
+:WORD_COUNT: 83
 :END:
 
 By the residue theorem (see [[#thm-residue][1]]), the contour integral can be evaluated. Combined with the Bernstein expansion ([[#bernstein-exp][2]]), this yields the bound.

@@ -3,7 +3,7 @@
 :URL: https://example.org/paper/abstract
 :DOMAIN: example.org
 :LANGUAGE: en
-:WORD_COUNT: 83
+:WORD_COUNT: 82
 :END:
 
 This paper discusses algorithms for graph traversal. The following diagram illustrates the main data structure used in the analysis.

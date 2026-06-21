@@ -4,7 +4,7 @@
 :SITE: Example Engineering
 :DOMAIN: example.com
 :DESCRIPTION: How we structured our multi-agent codebase.
-:WORD_COUNT: 35
+:WORD_COUNT: 36
 :END:
 
 Here is the top-level directory layout for the project:

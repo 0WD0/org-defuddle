@@ -2,11 +2,11 @@ mod partial_selectors;
 
 use kuchiki::traits::*;
 use kuchiki::{ElementData, NodeData, NodeRef};
-use once_cell::sync::Lazy;
 use regex::{Regex, RegexSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock as Lazy;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use url::Url;
@@ -402,6 +402,7 @@ struct HackerNewsComment {
     url: String,
     score: String,
     org: String,
+    body_html: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -427,8 +428,6 @@ enum SchemaTextFallback {
     Text(String),
 }
 
-static WORD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\p{L}\p{N}][\p{L}\p{N}'_-]*").unwrap());
-
 static NOISE_ATTR_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(&format!(
         "(?i)(?:{})",
@@ -444,6 +443,14 @@ static NOISE_ATTR_ANCHORED_RE: Lazy<Regex> = Lazy::new(|| {
     ))
     .unwrap()
 });
+static HTML_TAG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]*>").unwrap());
+static NBSP_ENTITY_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)&nbsp;").unwrap());
+static AMP_ENTITY_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)&amp;").unwrap());
+static LT_ENTITY_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)&lt;").unwrap());
+static GT_ENTITY_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)&gt;").unwrap());
+static QUOT_ENTITY_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)&quot;").unwrap());
+static DECIMAL_ENTITY_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"&#\d+;").unwrap());
+static NAMED_ENTITY_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"&\w+;").unwrap());
 
 static EXPLICIT_NO_CONTENT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\bno[-_\s]?content\b").unwrap());
@@ -928,9 +935,7 @@ pub fn parse_html_to_org(
         let mut retry_options = options.clone();
         retry_options.remove_partial_selectors = false;
         let retry = parse_html_to_org_once(html, retry_options)?;
-        if retry.word_count > result.word_count * 2
-            && !retry_introduces_cleanup_regression(&result, &retry)
-        {
+        if retry.word_count > result.word_count * 2 {
             result = retry;
         }
     }
@@ -939,9 +944,7 @@ pub fn parse_html_to_org(
         let mut retry_options = options.clone();
         retry_options.remove_hidden_elements = false;
         let retry = parse_html_to_org_once(html, retry_options)?;
-        if retry.word_count > result.word_count * 2
-            && !retry_introduces_cleanup_regression(&result, &retry)
-        {
+        if retry.word_count > result.word_count * 2 {
             result = retry;
         }
 
@@ -960,31 +963,13 @@ pub fn parse_html_to_org(
         }
     }
 
-    if result.word_count < 50
-        && (options.remove_low_scoring
-            || options.remove_partial_selectors
-            || options.remove_content_patterns)
-    {
-        let mut retry_options = options.clone();
-        retry_options.remove_low_scoring = false;
-        retry_options.remove_partial_selectors = false;
-        let retry = parse_html_to_org_once(html, retry_options)?;
-        if retry.word_count > result.word_count
-            && !retry_introduces_cleanup_regression(&result, &retry)
-        {
-            result = retry;
-        }
-    }
-
-    if result.word_count < 50 && options.remove_content_patterns {
+    if result.word_count < 50 {
         let mut retry_options = options.clone();
         retry_options.remove_low_scoring = false;
         retry_options.remove_partial_selectors = false;
         retry_options.remove_content_patterns = false;
         let retry = parse_html_to_org_once(html, retry_options)?;
-        if retry.word_count > result.word_count
-            && !retry_introduces_cleanup_regression(&result, &retry)
-        {
+        if retry.word_count > result.word_count {
             result = retry;
         }
     }
@@ -999,23 +984,6 @@ pub fn render_html_fragment_to_org(html: &str) -> String {
     let document = kuchiki::parse_html().one(html);
     let footnotes = collect_footnotes(&document);
     html_children_to_org_with_footnotes(&document, &footnotes)
-}
-
-fn retry_introduces_cleanup_regression(current: &DefuddleOutput, retry: &DefuddleOutput) -> bool {
-    const CLEANUP_REGRESSION_MARKERS: &[&str] = &[
-        "Links to this page",
-        "Interactive graph",
-        "Powered by Obsidian Publish",
-        "Top comment by",
-        "View all comments",
-        "See also",
-        "See how our platform can help",
-        "Tips, tutorials, and best practices",
-        "March 13, 2026",
-    ];
-    CLEANUP_REGRESSION_MARKERS
-        .iter()
-        .any(|marker| !current.org.contains(marker) && retry.org.contains(marker))
 }
 
 fn find_largest_hidden_content_selector(html: &str) -> Option<String> {
@@ -1282,6 +1250,8 @@ fn parse_html_to_org_once(
                 Some(&main),
                 options.debug.then_some(&mut debug_removals),
             );
+            let mut selector_debug = options.debug.then_some(&mut debug_removals);
+            remove_comment_widgets_by_selector(&main, &mut selector_debug);
         }
         if options.remove_partial_selectors {
             remove_partial_noise(
@@ -1319,6 +1289,9 @@ fn parse_html_to_org_once(
     }
 
     let step_start = Instant::now();
+    if options.standardize {
+        adopt_external_footnotes(&main, &document);
+    }
     let footnotes = if options.standardize {
         collect_footnotes(&document)
     } else {
@@ -1363,6 +1336,7 @@ fn parse_html_to_org_once(
     if options.standardize {
         let substep_start = Instant::now();
         standardize_drop_caps(&main);
+        standardize_caps_spans(&main);
         let elapsed = substep_start.elapsed();
         record_profile_elapsed(&mut profile, "standardizeDropCaps", elapsed);
         record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
@@ -1394,7 +1368,14 @@ fn parse_html_to_org_once(
         standardize_container_media_captions(&main);
         standardize_adjacent_media_captions(&main);
         standardize_figure_caption_text(&main);
+        standardize_arxiv_elements(&main);
         normalize_github_embedded_code_cards(&main);
+        standardize_arxiv_equation_tables(&main);
+        standardize_existing_mathml(&main);
+        standardize_generated_math_containers(&main);
+        standardize_math_scripts(&main);
+        standardize_math_images(&main);
+        standardize_code_blocks(&main);
     }
     let elapsed = step_start.elapsed();
     record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
@@ -1418,6 +1399,12 @@ fn parse_html_to_org_once(
         standardize_block_spans(&main);
         let elapsed = step_start.elapsed();
         record_profile_elapsed(&mut profile, "convertBlockSpans", elapsed);
+        record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+
+        let step_start = Instant::now();
+        standardize_bare_spans(&main);
+        let elapsed = step_start.elapsed();
+        record_profile_elapsed(&mut profile, "unwrapBareSpans", elapsed);
         record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
 
         let step_start = Instant::now();
@@ -1451,20 +1438,20 @@ fn parse_html_to_org_once(
     });
     let (mut body_html, mut body_org, mut word_count) = match fallback {
         Some(SchemaTextFallback::Node(node)) => {
-            let html = serialize_node(&node)?;
             let org = html_node_to_org_with_render_options(&node, &footnotes, render_options);
-            let words = count_words(&node.text_contents());
+            let html = serialize_output_node(&node, options.standardize, &footnotes)?;
+            let words = count_rendered_html_words(&node, &html, &org);
             (html, org, words)
         }
         Some(SchemaTextFallback::Text(text)) => {
             let org = render_schema_text_fallback(&text);
-            let words = count_words(&text);
+            let words = count_html_words(&text);
             (text, org, words)
         }
         None => {
-            let html = serialize_node(&main)?;
             let org = html_node_to_org_with_render_options(&main, &footnotes, render_options);
-            let words = count_words(&main.text_contents());
+            let html = serialize_output_node(&main, options.standardize, &footnotes)?;
+            let words = count_rendered_html_words(&main, &html, &org);
             (html, org, words)
         }
     };
@@ -1478,7 +1465,7 @@ fn parse_html_to_org_once(
         if !lede_org.trim().is_empty() {
             body_html = format!("{lede_html}\n{body_html}");
             body_org = format!("{}\n\n{}", lede_org.trim(), body_org.trim_start());
-            word_count += count_words(&lede.text_contents());
+            word_count += count_html_words(&lede_html);
         }
         record_profile(&mut profile, "standardizeContent", step_start);
     }
@@ -1486,9 +1473,9 @@ fn parse_html_to_org_once(
     let org = build_org_document(&metadata, &body_org, word_count);
     record_profile(&mut profile, "standardizeContent", step_start);
     let extractor_type = if steam_event.is_some() {
-        extractor_type("bbcodedata")
+        Some("bbcodedata".to_string())
     } else if wikipedia_document {
-        extractor_type("wikipedia")
+        Some("wikipedia".to_string())
     } else {
         None
     };
@@ -1709,8 +1696,36 @@ fn elapsed_ms(start: Instant) -> u64 {
     duration_ms(start.elapsed())
 }
 
-fn extractor_type(name: &str) -> Option<String> {
-    Some(name.to_string())
+fn extractor_output(
+    metadata: Metadata,
+    html: String,
+    org: String,
+    word_count: usize,
+    extractor_name: &str,
+    variables: Option<HashMap<String, String>>,
+) -> DefuddleOutput {
+    DefuddleOutput {
+        title: metadata.title,
+        description: metadata.description,
+        author: metadata.author,
+        published: metadata.published,
+        site: metadata.site,
+        url: metadata.url,
+        domain: metadata.domain,
+        favicon: metadata.favicon,
+        image: metadata.image,
+        language: metadata.language,
+        word_count,
+        parse_time: 0,
+        html,
+        org,
+        content_markdown: String::new(),
+        frontmatter: String::new(),
+        extractor_type: Some(extractor_name.to_string()),
+        variables,
+        debug: None,
+        profile: None,
+    }
 }
 
 fn extractor_variables<I, K>(entries: I) -> Option<HashMap<String, String>>
@@ -1814,28 +1829,9 @@ pub fn parse_c2_wiki_json_to_org(
     let org = build_org_document(&metadata, &body_org, word_count);
     let variables = metadata_variables(&metadata, &["title", "site", "published"]);
 
-    Ok(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html: body_html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("c2wiki"),
-        variables,
-        debug: None,
-        profile: None,
-    })
+    Ok(extractor_output(
+        metadata, body_html, org, word_count, "c2wiki", variables,
+    ))
 }
 
 pub fn parse_x_oembed_json_to_org(
@@ -2521,7 +2517,7 @@ fn debbugs_output(
         org,
         content_markdown: String::new(),
         frontmatter: String::new(),
-        extractor_type: extractor_type("debbugs"),
+        extractor_type: Some("debbugs".to_string()),
         variables: metadata_variables(&metadata, &["title", "author", "published", "site"]),
         debug: None,
         profile: None,
@@ -2939,28 +2935,45 @@ fn hn_story_with_comments_output(
         .and_then(|title| hn_date_from_title(&title))
         .unwrap_or_default();
 
-    let mut body = String::new();
-    if let Some(url) = title_link
+    let story_url = title_link
         .as_ref()
         .and_then(|node| element_attr(node, "href"))
-        .and_then(|href| absolutize_url(Some(base_url), &href))
-    {
+        .and_then(|href| absolutize_url(Some(base_url), &href));
+    let mut body = String::new();
+    if let Some(url) = story_url.as_ref() {
         body.push_str(&format!("[[{url}][{url}]]\n\n-----\n\n"));
     }
 
-    if include_replies.extractor_replies() {
-        let comments = hn_comments(document, base_url);
-        if !comments.is_empty() {
-            body.push_str("** Comments\n\n");
-            body.push_str(&render_hn_comments(&comments));
-        }
+    let comments = if include_replies.extractor_replies() {
+        hn_comments(document, base_url)
+    } else {
+        Vec::new()
+    };
+    if !comments.is_empty() {
+        body.push_str("** Comments\n\n");
+        body.push_str(&render_hn_comments(&comments));
     }
+    let post_html = story_url
+        .map(|url| {
+            format!(
+                r#"<p><a href="{}" target="_blank">{}</a></p>"#,
+                escape_html_attr(&url),
+                escape_html_text(&url)
+            )
+        })
+        .unwrap_or_default();
+    let html = standardized_post_comments_html(
+        "hackernews",
+        &post_html,
+        &render_standardized_comments_html(&comments),
+    );
 
     hn_output(
         document,
         base_url,
         hn_base_metadata(base_url, title, author, published),
         body,
+        Some(html),
     )
 }
 
@@ -3007,6 +3020,7 @@ fn hn_comment_permalink_output(
         base_url,
         hn_base_metadata(base_url, title, author, published),
         body,
+        None,
     )
 }
 
@@ -3023,9 +3037,11 @@ fn hn_listing_output(document: &NodeRef, base_url: &str) -> Result<DefuddleOutpu
                 String::new(),
             ),
             body,
+            None,
         );
     };
 
+    let mut story_count = 0usize;
     for row in rows {
         let row = row.as_node().clone();
         let title_link = select_first_node(&row, ".titleline a");
@@ -3040,6 +3056,7 @@ fn hn_listing_output(document: &NodeRef, base_url: &str) -> Result<DefuddleOutpu
         };
         let site = select_text(&row, ".sitestr");
         let subtext = next_element_sibling(&row);
+        story_count += 1;
 
         body.push_str(&format!("1. [[{url}][{title}]]"));
         if let Some(site) = site.filter(|site| !site.is_empty()) {
@@ -3063,7 +3080,8 @@ fn hn_listing_output(document: &NodeRef, base_url: &str) -> Result<DefuddleOutpu
         }
     }
 
-    hn_output(
+    let word_count = count_words(&body).saturating_sub(story_count);
+    hn_output_with_word_count(
         document,
         base_url,
         hn_base_metadata(
@@ -3073,6 +3091,8 @@ fn hn_listing_output(document: &NodeRef, base_url: &str) -> Result<DefuddleOutpu
             String::new(),
         ),
         body,
+        None,
+        Some(word_count),
     )
 }
 
@@ -3125,8 +3145,14 @@ fn hn_comment(row: &NodeRef, base_url: &str) -> Option<HackerNewsComment> {
         .and_then(|href| absolutize_url(Some(base_url), &href))
         .unwrap_or_default();
     let score = select_text(row, ".comhead .score").unwrap_or_default();
-    let org = select_first_node(row, ".commtext")
-        .map(|node| render_hn_comment_text(&node, base_url))
+    let content = select_first_node(row, ".commtext");
+    let org = content
+        .as_ref()
+        .map(|node| render_hn_comment_text(node, base_url))
+        .unwrap_or_default();
+    let body_html = content
+        .as_ref()
+        .map(serialize_children_html)
         .unwrap_or_default();
     let depth = select_first_node(row, "td.ind img")
         .and_then(|node| element_attr(&node, "width"))
@@ -3141,6 +3167,7 @@ fn hn_comment(row: &NodeRef, base_url: &str) -> Option<HackerNewsComment> {
         url,
         score,
         org,
+        body_html,
     })
 }
 
@@ -3186,6 +3213,56 @@ fn render_hn_comments(comments: &[HackerNewsComment]) -> String {
     }
 
     out
+}
+
+fn render_standardized_comments_html(comments: &[HackerNewsComment]) -> String {
+    let mut out = String::new();
+    let mut open_depth = 0usize;
+    for comment in comments {
+        let target_depth = comment.depth + 1;
+        while open_depth >= target_depth && open_depth > 0 {
+            out.push_str("</blockquote>");
+            open_depth -= 1;
+        }
+        while open_depth < target_depth {
+            out.push_str("<blockquote>");
+            open_depth += 1;
+        }
+        out.push_str(&standardized_comment_html(comment));
+    }
+    while open_depth > 0 {
+        out.push_str("</blockquote>");
+        open_depth -= 1;
+    }
+    out
+}
+
+fn standardized_comment_html(comment: &HackerNewsComment) -> String {
+    let date = if comment.url.is_empty() || is_dangerous_url(&comment.url) {
+        format!(
+            r#"<span class="comment-date">{}</span>"#,
+            escape_html_text(&comment.published)
+        )
+    } else {
+        format!(
+            r#"<a href="{}" class="comment-link">{}</a>"#,
+            escape_html_attr(&comment.url),
+            escape_html_text(&comment.published)
+        )
+    };
+    let score = if comment.score.is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#" · <span class="comment-points">{}</span>"#,
+            escape_html_text(&comment.score)
+        )
+    };
+    format!(
+        r#"<div class="comment"><div class="comment-metadata"><span class="comment-author"><strong>{}</strong></span> · {date}{score}</div><div class="comment-content">{}</div></div>"#,
+        escape_html_text(&comment.author),
+        comment.body_html
+    )
 }
 
 fn push_hn_end_quote(out: &mut String) {
@@ -3237,48 +3314,54 @@ fn hn_output(
     base_url: &str,
     metadata: Metadata,
     body_org: String,
+    html_override: Option<String>,
 ) -> Result<DefuddleOutput, DefuddleError> {
-    let word_count = count_words(&body_org);
-    let html = select_first_node(document, "#hnmain")
-        .map(|node| serialize_node(&node))
-        .unwrap_or_else(|| serialize_node(document))?;
+    hn_output_with_word_count(document, base_url, metadata, body_org, html_override, None)
+}
+
+fn hn_output_with_word_count(
+    document: &NodeRef,
+    base_url: &str,
+    mut metadata: Metadata,
+    body_org: String,
+    html_override: Option<String>,
+    word_count_override: Option<usize>,
+) -> Result<DefuddleOutput, DefuddleError> {
+    let html = if let Some(html) = html_override {
+        html
+    } else {
+        select_first_node(document, "#hnmain")
+            .map(|node| serialize_node(&node))
+            .unwrap_or_else(|| serialize_node(document))?
+    };
+    let word_count = if let Some(word_count) = word_count_override {
+        word_count
+    } else if html.starts_with("<article data-defuddle=") {
+        count_html_words(&html)
+    } else {
+        count_words(&body_org)
+    };
     let org = build_org_document(&metadata, &body_org, word_count);
-    let domain = if metadata.domain.is_empty() {
-        Url::parse(base_url)
+    if metadata.domain.is_empty() {
+        metadata.domain = Url::parse(base_url)
             .ok()
             .and_then(|url| url.host_str().map(str::to_owned))
-            .unwrap_or_default()
-    } else {
-        metadata.domain.clone()
-    };
+            .unwrap_or_default();
+    }
 
     let variables = metadata_variables(
         &metadata,
         &["title", "author", "site", "description", "published"],
     );
 
-    Ok(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
+    Ok(extractor_output(
+        metadata,
         html,
         org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("hackernews"),
+        word_count,
+        "hackernews",
         variables,
-        debug: None,
-        profile: None,
-    })
+    ))
 }
 
 fn github_output(
@@ -3300,6 +3383,7 @@ fn github_output(
     sanitize_links(document);
     resolve_relative_urls(document, base_url);
     remove_github_chrome(document);
+    standardize_code_blocks(document);
     if !include_images {
         remove_content_images(document);
     }
@@ -3319,36 +3403,17 @@ fn github_output(
 
     let repo = github_repo_slug(url.as_deref());
     let metadata = github_metadata(document, kind, url.as_deref(), repo.as_deref());
-    let word_count = count_words(&body_org);
     let html = github_body_html(kind, &primary_body, document, include_replies)?;
+    let word_count = count_html_words(&html);
     let org = build_org_document(&metadata, &body_org, word_count);
     let variables = metadata_variables(
         &metadata,
         &["title", "author", "published", "site", "description"],
     );
 
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("github"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "github", variables,
+    )))
 }
 
 fn is_github_document(document: &NodeRef, provided_url: Option<&str>) -> bool {
@@ -3679,14 +3744,64 @@ fn github_body_html(
     document: &NodeRef,
     include_replies: IncludeReplies,
 ) -> Result<String, DefuddleError> {
-    let mut html = serialize_node(primary_body)?;
-    if kind == GitHubPageKind::PullRequest && include_replies.extractor_replies() {
-        for comment in github_pull_request_comments(document) {
-            html.push('\n');
-            html.push_str(&serialize_node(&comment.body)?);
+    let primary_html = serialize_node(primary_body)?;
+    match kind {
+        GitHubPageKind::Issue => Ok(github_issue_body_html(document, &primary_html)),
+        GitHubPageKind::PullRequest => {
+            let comments_html = if include_replies.extractor_replies() {
+                render_github_comments_html(&github_pull_request_comments(document))?
+            } else {
+                String::new()
+            };
+            Ok(standardized_post_comments_html(
+                "github",
+                &primary_html,
+                &comments_html,
+            ))
         }
     }
-    Ok(html)
+}
+
+fn github_issue_body_html(document: &NodeRef, primary_html: &str) -> String {
+    let mut parts = Vec::new();
+    if let Some(author) = select_first_node(document, "[data-testid=\"issue-body-header-author\"]")
+    {
+        let text = cleanup_inline(&author.text_contents());
+        if !text.is_empty() {
+            if let Some(href) = element_attr(&author, "href") {
+                parts.push(format!(
+                    r#"<p><a href="{}">{}</a></p>"#,
+                    escape_html_attr(&href),
+                    escape_html_text(&text)
+                ));
+            } else {
+                parts.push(format!("<p>{}</p>", escape_html_text(&text)));
+            }
+        }
+    }
+    if let Some(association) = select_text(document, "[data-testid=\"comment-author-association\"]")
+    {
+        parts.push(format!("<p>{}</p>", escape_html_text(&association)));
+    }
+    parts.push(primary_html.to_string());
+    format!("<main>{}</main>", parts.join("\n"))
+}
+
+fn render_github_comments_html(comments: &[GitHubComment]) -> Result<String, DefuddleError> {
+    let mut out = String::new();
+    for comment in comments {
+        let body = serialize_node(&comment.body)?;
+        out.push_str("<blockquote><div class=\"comment\"><div class=\"comment-metadata\">");
+        out.push_str(&format!(
+            r#"<span class="comment-author"><strong>{}</strong></span> · <span class="comment-date">{}</span>"#,
+            escape_html_text(&comment.author),
+            escape_html_text(&date_part(&comment.published))
+        ));
+        out.push_str("</div><div class=\"comment-content\">");
+        out.push_str(&body);
+        out.push_str("</div></div></blockquote>");
+    }
+    Ok(out)
 }
 
 fn standardize_github_issue_headers(document: &NodeRef) {
@@ -3797,6 +3912,775 @@ fn normalize_github_embedded_code_cards(document: &NodeRef) {
     }
 }
 
+fn standardize_arxiv_equation_tables(root: &NodeRef) {
+    let Ok(matches) = root.select("table.ltx_eqn_table") else {
+        return;
+    };
+    let tables = matches
+        .filter_map(|matched| {
+            let table = matched.as_node().clone();
+            let blocks = arxiv_equation_table_latex_blocks(&table)?;
+            Some((table, blocks))
+        })
+        .collect::<Vec<_>>();
+
+    for (table, blocks) in tables {
+        for latex in blocks {
+            let Some(math) = standardized_latex_math_node(&latex, true, latex.clone()) else {
+                continue;
+            };
+            table.insert_before(math);
+        }
+        table.detach();
+    }
+}
+
+fn standardize_existing_mathml(root: &NodeRef) {
+    let wrappers = root
+        .select(
+            ".mwe-math-element, .katex, .MathJax, .MathJax_Display, .MathJax_SVG, mjx-container, [data-mathml]",
+        )
+        .ok()
+        .into_iter()
+        .flatten()
+        .map(|matched| matched.as_node().clone())
+        .filter(|node| select_first_node(node, "math").is_some())
+        .filter(|node| {
+            !node.ancestors().any(|ancestor| {
+                matches!(
+                    tag_name(&ancestor).as_deref(),
+                    Some("math" | "mjx-container")
+                )
+                    || has_math_wrapper_class(&ancestor)
+            })
+        })
+        .collect::<Vec<_>>();
+    for wrapper in wrappers {
+        let Some(source) = select_first_node(&wrapper, "math") else {
+            continue;
+        };
+        let Some(element) = wrapper.as_element() else {
+            continue;
+        };
+        let Some(math) = math_info(&wrapper, element) else {
+            continue;
+        };
+        let preserve_semantics = !has_class_token(&wrapper, "mwe-math-element");
+        let Some(standardized) = standardized_mathml_node(&source, &math, preserve_semantics)
+        else {
+            continue;
+        };
+        wrapper.insert_before(standardized);
+        wrapper.detach();
+    }
+
+    let standalone = root
+        .select("math")
+        .ok()
+        .into_iter()
+        .flatten()
+        .map(|matched| matched.as_node().clone())
+        .filter(|node| {
+            !node
+                .ancestors()
+                .any(|ancestor| has_math_wrapper_class(&ancestor))
+        })
+        .collect::<Vec<_>>();
+    for source in standalone {
+        let Some(element) = source.as_element() else {
+            continue;
+        };
+        let Some(math) = math_info(&source, element) else {
+            continue;
+        };
+        let Some(standardized) = standardized_mathml_node(&source, &math, true) else {
+            continue;
+        };
+        source.insert_before(standardized);
+        source.detach();
+    }
+}
+
+fn has_math_wrapper_class(node: &NodeRef) -> bool {
+    node.as_element()
+        .and_then(|element| element.attributes.borrow().get("class").map(str::to_string))
+        .is_some_and(|class| is_math_container_class(&class))
+}
+
+fn standardized_mathml_node(
+    source: &NodeRef,
+    math: &MathInfo,
+    preserve_semantics: bool,
+) -> Option<NodeRef> {
+    let standardized = new_html_element("math")?;
+    {
+        let mut attrs = standardized.as_element()?.attributes.borrow_mut();
+        attrs.insert("xmlns", "http://www.w3.org/1998/Math/MathML".to_string());
+        attrs.insert(
+            "display",
+            if math.is_block { "block" } else { "inline" }.to_string(),
+        );
+        attrs.insert("data-latex", math.latex.clone());
+    }
+
+    let content_root = if preserve_semantics {
+        source.clone()
+    } else {
+        select_first_node(source, "semantics").unwrap_or_else(|| source.clone())
+    };
+    let content = content_root
+        .children()
+        .filter(|child| {
+            preserve_semantics
+                || !matches!(
+                    tag_name(child).as_deref(),
+                    Some("annotation" | "annotation-xml")
+                )
+        })
+        .collect::<Vec<_>>();
+    if content.is_empty() {
+        standardized.append(NodeRef::new_text(math_count_text_from_latex(&math.latex)));
+    } else {
+        for child in content {
+            standardized.append(child);
+        }
+    }
+    Some(standardized)
+}
+
+fn standardize_generated_math_containers(root: &NodeRef) {
+    let formula_tables = root
+        .select("table")
+        .ok()
+        .into_iter()
+        .flatten()
+        .map(|matched| matched.as_node().clone())
+        .filter(|table| {
+            let class = element_attr(table, "class").unwrap_or_default();
+            is_display_formula_node("table", &class)
+        })
+        .collect::<Vec<_>>();
+    for table in formula_tables {
+        let math = table
+            .as_element()
+            .and_then(|element| math_info(&table, element));
+        if let Some(standardized) = math.as_ref().and_then(standardized_math_node) {
+            table.insert_before(standardized);
+        }
+        table.detach();
+    }
+
+    let candidates = root
+        .select(
+            "[data-latex], [data-math], [data-tex], .hurmet-tex[data-entry], .math-inline, .math-block, mjx-container",
+        )
+        .ok()
+        .into_iter()
+        .flatten()
+        .map(|matched| matched.as_node().clone())
+        .filter(|node| tag_name(node).as_deref() != Some("math"))
+        .filter(|node| {
+            !node.ancestors().any(|ancestor| {
+                tag_name(&ancestor).as_deref() == Some("math")
+                    || element_attr(&ancestor, "data-latex").is_some()
+                    || element_attr(&ancestor, "data-math").is_some()
+                    || element_attr(&ancestor, "data-tex").is_some()
+                    || has_class_token(&ancestor, "math-inline")
+                    || has_class_token(&ancestor, "math-block")
+                    || tag_name(&ancestor).as_deref() == Some("mjx-container")
+            })
+        })
+        .collect::<Vec<_>>();
+    for candidate in candidates {
+        let math = candidate
+            .as_element()
+            .and_then(|element| math_info(&candidate, element));
+        let standardized = math.as_ref().and_then(|math| {
+            if has_class_token(&candidate, "hurmet-tex") {
+                select_first_node(&candidate, "math")
+                    .and_then(|source| standardized_mathml_node(&source, math, true))
+            } else {
+                standardized_math_node(math)
+            }
+        });
+        if let Some(standardized) = standardized {
+            candidate.insert_before(standardized);
+        }
+        candidate.detach();
+    }
+}
+
+fn standardize_math_scripts(root: &NodeRef) {
+    let Ok(matches) = root.select("script") else {
+        return;
+    };
+    let scripts = matches
+        .filter_map(|matched| {
+            let node = matched.as_node().clone();
+            let element = node.as_element()?;
+            let math = math_info(&node, element)?;
+            Some((node, math))
+        })
+        .collect::<Vec<_>>();
+
+    for (script, math) in scripts {
+        let Some(math_node) = standardized_math_node(&math) else {
+            continue;
+        };
+        script.insert_before(math_node);
+        script.detach();
+    }
+}
+
+fn standardize_math_images(root: &NodeRef) {
+    let Ok(matches) = root.select("img") else {
+        return;
+    };
+    let images = matches
+        .filter_map(|matched| {
+            let node = matched.as_node().clone();
+            if math_image_has_source_math(&node) {
+                return None;
+            }
+            let element = node.as_element()?;
+            let math = math_info(&node, element)?;
+            Some((node, math))
+        })
+        .collect::<Vec<_>>();
+
+    for (image, math) in images {
+        let Some(math_node) = standardized_math_node(&math) else {
+            continue;
+        };
+        image.insert_before(math_node);
+        image.detach();
+    }
+}
+
+fn math_image_has_source_math(image: &NodeRef) -> bool {
+    image
+        .parent()
+        .is_some_and(|parent| count_selector(&parent, "math") > 0)
+}
+
+fn standardized_math_node(math: &MathInfo) -> Option<NodeRef> {
+    let count_text = math_count_text_from_latex(&math.latex);
+    standardized_latex_math_node(
+        &math.latex,
+        math.is_block,
+        if count_text.is_empty() {
+            math.latex.clone()
+        } else {
+            count_text
+        },
+    )
+}
+
+fn standardized_latex_math_node(
+    latex: &str,
+    is_block: bool,
+    count_text: String,
+) -> Option<NodeRef> {
+    let node = new_html_element("math")?;
+    {
+        let mut attrs = node.as_element()?.attributes.borrow_mut();
+        attrs.insert("xmlns", "http://www.w3.org/1998/Math/MathML".to_string());
+        attrs.insert(
+            "display",
+            if is_block { "block" } else { "inline" }.to_string(),
+        );
+        attrs.insert("data-latex", latex.to_string());
+    }
+    node.append(NodeRef::new_text(count_text));
+    Some(node)
+}
+
+fn math_count_text_from_latex(latex: &str) -> String {
+    let chars = latex.chars().collect::<Vec<_>>();
+    let mut tokens = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch.is_whitespace() {
+            i += 1;
+            continue;
+        }
+        if ch == '\\' {
+            i += 1;
+            let start = i;
+            while i < chars.len() && chars[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            if start == i {
+                if i < chars.len()
+                    && !chars[i].is_whitespace()
+                    && !matches!(chars[i], '\\' | ',' | ';' | '!' | ':' | ' ')
+                {
+                    tokens.push(chars[i].to_string());
+                }
+                i += 1;
+                continue;
+            }
+            let command = chars[start..i].iter().collect::<String>();
+            if matches!(command.as_str(), "begin" | "end") {
+                if let Some((_, next_i)) = latex_braced_group(&chars, i) {
+                    i = next_i;
+                }
+                continue;
+            }
+            if is_latex_text_command(&command) {
+                if let Some((text, next_i)) = latex_braced_group(&chars, i) {
+                    if !text.trim().is_empty() {
+                        tokens.push(text.trim().to_string());
+                        if command == "operatorname" {
+                            tokens.push("\u{2061}".to_string());
+                        }
+                    }
+                    i = next_i;
+                    continue;
+                }
+            }
+            if !is_latex_structure_command(&command) {
+                tokens.push(command);
+                if is_latex_function_command(tokens.last().map(String::as_str).unwrap_or_default())
+                {
+                    tokens.push("\u{2061}".to_string());
+                }
+            }
+            continue;
+        }
+        if ch == '{' || ch == '}' {
+            i += 1;
+            continue;
+        }
+        if ch == '_' || ch == '^' {
+            i += 1;
+            if let Some((script, next_i)) = latex_braced_group(&chars, i) {
+                let script = script.trim();
+                if !script.is_empty() {
+                    if script.chars().all(|ch| ch.is_ascii_digit() || ch == '.')
+                        || script.chars().all(|ch| ch.is_ascii_alphabetic())
+                        || (script.contains(',')
+                            && script
+                                .chars()
+                                .all(|ch| ch.is_ascii_digit() || matches!(ch, ',' | '.')))
+                    {
+                        tokens.push(script.to_string());
+                    } else {
+                        tokens.extend(
+                            math_count_text_from_latex(script)
+                                .split_whitespace()
+                                .map(str::to_string),
+                        );
+                    }
+                }
+                i = next_i;
+            }
+            continue;
+        }
+        if ch == '&' {
+            i += 1;
+            continue;
+        }
+        if ch.is_ascii_alphanumeric() {
+            let start = i;
+            while i < chars.len() && chars[i].is_ascii_alphanumeric() {
+                i += 1;
+            }
+            let token = chars[start..i].iter().collect::<String>();
+            if token.len() > 1 && !token.chars().all(|ch| ch.is_ascii_digit()) {
+                tokens.extend(token.chars().map(|ch| ch.to_string()));
+            } else {
+                tokens.push(token);
+            }
+            continue;
+        }
+        tokens.push(ch.to_string());
+        i += 1;
+    }
+    tokens.join(" ")
+}
+
+fn latex_braced_group(chars: &[char], start: usize) -> Option<(String, usize)> {
+    let mut i = start;
+    while i < chars.len() && chars[i].is_whitespace() {
+        i += 1;
+    }
+    if chars.get(i).copied()? != '{' {
+        return None;
+    }
+    i += 1;
+    let content_start = i;
+    let mut depth = 1;
+    while i < chars.len() {
+        match chars[i] {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((chars[content_start..i].iter().collect(), i + 1));
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn is_latex_text_command(command: &str) -> bool {
+    matches!(command, "text" | "operatorname" | "mathrm")
+}
+
+fn is_latex_function_command(command: &str) -> bool {
+    matches!(
+        command,
+        "arccos"
+            | "arcsin"
+            | "arctan"
+            | "cos"
+            | "cosh"
+            | "cot"
+            | "coth"
+            | "csc"
+            | "exp"
+            | "ker"
+            | "lg"
+            | "ln"
+            | "log"
+            | "sec"
+            | "sin"
+            | "sinh"
+            | "tan"
+            | "tanh"
+    )
+}
+
+fn is_latex_structure_command(command: &str) -> bool {
+    matches!(
+        command,
+        "left"
+            | "right"
+            | "big"
+            | "Big"
+            | "bigl"
+            | "bigr"
+            | "Bigl"
+            | "Bigr"
+            | "boldsymbol"
+            | "bm"
+            | "mathbb"
+            | "mathbf"
+            | "mathcal"
+            | "mathfrak"
+            | "mathit"
+            | "mathnormal"
+            | "mathrm"
+            | "mathsf"
+            | "mathtt"
+            | "operatorname"
+            | "frac"
+            | "dfrac"
+            | "sqrt"
+            | "text"
+            | "quad"
+            | "qquad"
+            | "hspace"
+            | "vspace"
+            | "!"
+    )
+}
+
+fn standardize_code_blocks(root: &NodeRef) {
+    standardize_lean_verso_examples(root);
+    let selector = [
+        "pre",
+        "table",
+        "div[class]",
+        "div[data-lang]",
+        "div[data-language]",
+        "div[language]",
+        "section[class]",
+        "section[data-lang]",
+        "section[data-language]",
+    ]
+    .join(", ");
+    let Ok(matches) = root.select(&selector) else {
+        return;
+    };
+
+    let mut seen = HashSet::new();
+    let candidates = matches
+        .filter_map(|matched| {
+            let node = matched.as_node().clone();
+            (seen.insert(node_key(&node)) && is_standardizable_code_block_candidate(&node))
+                .then_some(node)
+        })
+        .filter(|node| !has_standardizable_code_block_ancestor(node))
+        .collect::<Vec<_>>();
+
+    for node in candidates {
+        if node.parent().is_none() || !is_descendant_of(&node, root) {
+            continue;
+        }
+        cleanup_code_block_chrome(&node);
+        let replacements = standardized_code_replacements(&node);
+        if replacements.is_empty() {
+            continue;
+        }
+        for replacement in replacements {
+            node.insert_before(replacement);
+        }
+        node.detach();
+    }
+
+    unwrap_code_wrapped_pre_blocks(root);
+}
+
+fn cleanup_code_block_chrome(node: &NodeRef) {
+    remove_code_block_inner_chrome(node);
+    remove_code_block_header_siblings(node);
+}
+
+fn remove_code_block_inner_chrome(node: &NodeRef) {
+    let Ok(matches) = node.select("button, [class*=\"codeblock-button\"]") else {
+        return;
+    };
+    let nodes = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for node in nodes {
+        node.detach();
+    }
+}
+
+fn remove_code_block_header_siblings(node: &NodeRef) {
+    let mut ancestor = node.clone();
+    for _ in 0..3 {
+        let Some(container) = ancestor.parent() else {
+            break;
+        };
+        if tag_name(&container).as_deref() == Some("body") {
+            break;
+        }
+        if element_children(&container).len() > 5 || is_inside_callout(&container) {
+            break;
+        }
+
+        let siblings = element_children(&container);
+        for sibling in siblings {
+            if sibling == ancestor || is_descendant_of(&ancestor, &sibling) {
+                continue;
+            }
+            if is_code_block_header_sibling(&sibling) {
+                sibling.detach();
+            }
+        }
+        ancestor = container;
+    }
+}
+
+fn is_inside_callout(node: &NodeRef) -> bool {
+    node.ancestors().any(|ancestor| {
+        ancestor
+            .as_element()
+            .is_some_and(|element| element.attributes.borrow().get("data-callout").is_some())
+    })
+}
+
+fn is_code_block_header_sibling(node: &NodeRef) -> bool {
+    if !matches!(tag_name(node).as_deref(), Some("div" | "span")) {
+        return false;
+    }
+    let text = normalize_ws(&node.text_contents());
+    count_words(&text) <= 5
+        && count_selector(
+            node,
+            "pre, code, img, svg, table, h1, h2, h3, h4, h5, h6, p, blockquote, ul, ol, hr",
+        ) == 0
+}
+
+fn standardize_lean_verso_examples(root: &NodeRef) {
+    let Ok(matches) = root.select("div, section") else {
+        return;
+    };
+    let examples = matches
+        .map(|matched| matched.as_node().clone())
+        .filter(|node| {
+            node.as_element()
+                .is_some_and(|element| is_lean_verso_example_container(node, element))
+        })
+        .collect::<Vec<_>>();
+    for example in examples {
+        let Some(text) = lean_verso_example_text(&example) else {
+            continue;
+        };
+        let Some(wrapper) = new_html_element("div") else {
+            continue;
+        };
+        let Some(pre) = standardized_code_pre_node(&text, Some("lean".to_string())) else {
+            continue;
+        };
+        wrapper.append(pre);
+        example.insert_before(wrapper);
+        example.detach();
+    }
+}
+
+fn is_standardizable_code_block_candidate(node: &NodeRef) -> bool {
+    if node.ancestors().any(|ancestor| {
+        ancestor
+            .as_element()
+            .is_some_and(|element| is_lean_verso_example_container(&ancestor, element))
+    }) {
+        return false;
+    }
+
+    let Some(element) = node.as_element() else {
+        return false;
+    };
+    let tag = element.name.local.as_ref();
+    if tag == "pre" {
+        return true;
+    }
+    if tag == "table" {
+        return code_table_blocks(node).is_some();
+    }
+    if is_code_block_container(node, element) {
+        return true;
+    }
+    if !matches!(tag, "div" | "section") {
+        return false;
+    }
+
+    let attrs = element_attr_string(element).to_ascii_lowercase();
+    let has_code_marker = attrs.contains("prismjs")
+        || attrs.contains("syntaxhighlighter")
+        || attrs.contains("highlight")
+        || attrs.contains("wp-block-syntaxhighlighter-code")
+        || attrs.contains("wp-block-code")
+        || attrs.contains("language-")
+        || attrs.contains("source-code")
+        || attrs.contains("code-block")
+        || attrs.contains("codeblock");
+    if !has_code_marker || count_selector(node, "pre, code, .cm-content, table") == 0 {
+        return false;
+    }
+
+    count_selector(node, "p, blockquote, img, picture, figure, ul, ol") == 0
+}
+
+fn has_standardizable_code_block_ancestor(node: &NodeRef) -> bool {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if is_standardizable_code_block_candidate(&parent) {
+            return true;
+        }
+        current = parent.parent();
+    }
+    false
+}
+
+fn standardized_code_replacements(node: &NodeRef) -> Vec<NodeRef> {
+    if let Some(blocks) = code_table_blocks_in_candidate(node) {
+        let table_language = code_language_in_subtree(node);
+        return blocks
+            .into_iter()
+            .filter_map(|block| {
+                let language = code_language_in_subtree(&block).or_else(|| table_language.clone());
+                standardized_code_pre_node(&code_block_text(&block), language)
+            })
+            .collect();
+    }
+
+    standardized_code_pre_node(&code_block_text(node), code_language_in_subtree(node))
+        .into_iter()
+        .collect()
+}
+
+fn code_language_in_subtree(node: &NodeRef) -> Option<String> {
+    let mut candidates = Vec::new();
+    if let Some(element) = node.as_element() {
+        let attrs = element.attributes.borrow();
+        push_named_code_language_attrs(&mut candidates, &attrs);
+        drop(attrs);
+        candidates.push(element_attr_string(element));
+    }
+    if let Ok(matches) = node.select("code, pre") {
+        for matched in matches {
+            let attrs = matched.attributes.borrow();
+            push_named_code_language_attrs(&mut candidates, &attrs);
+            drop(attrs);
+            candidates.push(element_attr_fingerprint(&matched));
+        }
+    }
+
+    find_code_language(&candidates)
+}
+
+fn code_table_blocks_in_candidate(node: &NodeRef) -> Option<Vec<NodeRef>> {
+    if let Some(blocks) = code_table_blocks(node) {
+        return Some(blocks);
+    }
+
+    let Ok(matches) = node.select("table") else {
+        return None;
+    };
+    let mut seen = HashSet::new();
+    let mut blocks = Vec::new();
+    for matched in matches {
+        if let Some(table_blocks) = code_table_blocks(matched.as_node()) {
+            for block in table_blocks {
+                if seen.insert(node_key(&block)) {
+                    blocks.push(block);
+                }
+            }
+        }
+    }
+
+    (!blocks.is_empty()).then_some(blocks)
+}
+
+fn standardized_code_pre_node(text: &str, language: Option<String>) -> Option<NodeRef> {
+    let text = text.trim_matches('\n');
+    if text.trim().is_empty() {
+        return None;
+    }
+
+    let pre = new_html_element("pre")?;
+    let code = new_html_element("code")?;
+    if let Some(language) = language
+        .map(|language| language.trim().to_string())
+        .filter(|language| !language.is_empty())
+    {
+        let mut attrs = code.as_element()?.attributes.borrow_mut();
+        attrs.insert("data-lang", language.clone());
+        attrs.insert("class", format!("language-{language}"));
+    }
+    code.append(NodeRef::new_text(text));
+    pre.append(code);
+    Some(pre)
+}
+
+fn unwrap_code_wrapped_pre_blocks(root: &NodeRef) {
+    let Ok(matches) = root.select("code > pre") else {
+        return;
+    };
+    let pres = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for pre in pres {
+        let Some(parent) = pre.parent() else {
+            continue;
+        };
+        if tag_name(&parent).as_deref() != Some("code") {
+            continue;
+        }
+        parent.insert_before(pre);
+        parent.detach();
+    }
+}
+
 fn is_github_issue_body_header_node(node: &NodeRef) -> bool {
     element_attr(node, "class").is_some_and(|class| {
         let class = class.to_ascii_lowercase();
@@ -3871,28 +4755,9 @@ fn linkedin_output(
     let org = build_org_document(&metadata, &body, word_count);
     let variables = metadata_variables(&metadata, &["title", "author", "site", "description"]);
 
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("linkedin"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "linkedin", variables,
+    )))
 }
 
 fn is_linkedin_document(document: &NodeRef, provided_url: Option<&str>) -> bool {
@@ -4249,6 +5114,7 @@ fn linkedin_comment(comment: &NodeRef, depth: usize, base_url: &str) -> Option<H
         url,
         score,
         org: content,
+        body_html: String::new(),
     })
 }
 
@@ -4349,28 +5215,9 @@ fn youtube_output(
         None,
     );
 
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("youtube"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "youtube", variables,
+    )))
 }
 
 fn youtube_api_output(
@@ -4479,28 +5326,9 @@ fn youtube_api_output(
         body_html.push_str(&transcript.html);
     }
 
-    Ok(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html: body_html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("youtube"),
-        variables,
-        debug: None,
-        profile: None,
-    })
+    Ok(extractor_output(
+        metadata, body_html, org, word_count, "youtube", variables,
+    ))
 }
 
 fn is_youtube_document(document: &NodeRef, provided_url: Option<&str>) -> bool {
@@ -4514,7 +5342,7 @@ fn is_youtube_document(document: &NodeRef, provided_url: Option<&str>) -> bool {
         .as_deref()
         .is_some_and(is_youtube_url)
         && meta_content(document, "property", "og:site_name")
-            .is_none_or(|site| site.eq_ignore_ascii_case("YouTube"))
+            .map_or(true, |site| site.eq_ignore_ascii_case("YouTube"))
 }
 
 fn is_youtube_url(url: &str) -> bool {
@@ -5981,28 +6809,9 @@ fn bilibili_output(
         Some(info.part.as_str()),
     );
 
-    Ok(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("bilibili"),
-        variables,
-        debug: None,
-        profile: None,
-    })
+    Ok(extractor_output(
+        metadata, html, org, word_count, "bilibili", variables,
+    ))
 }
 
 fn bilibili_bvid_from_url(provided_url: Option<&str>) -> Option<String> {
@@ -6416,36 +7225,17 @@ fn substack_output(
         return Ok(None);
     }
 
-    let word_count = count_words(&body_org);
     let html = serialize_node(&body_node)?;
+    let word_count = count_html_words(&html);
     let org = build_org_document(&metadata, &body_org, word_count);
     let variables = metadata_variables(
         &metadata,
         &["title", "author", "site", "description", "published"],
     );
 
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("substack"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "substack", variables,
+    )))
 }
 
 fn is_substack_document(document: &NodeRef, provided_url: Option<&str>) -> bool {
@@ -6621,7 +7411,7 @@ fn substack_note_body_org(
 ) -> String {
     let mut body = html_children_to_org_with_footnotes(body_node, &FootnoteState::default());
     if append_metadata_image && !metadata.image.is_empty() && !body.contains(&metadata.image) {
-        body.push_str("\n");
+        body.push('\n');
         body.push_str(&format!("[[{}]]\n", metadata.image));
     }
     body
@@ -6654,33 +7444,14 @@ fn medium_output(
     if body_org.trim().is_empty() {
         return Ok(None);
     }
-    let word_count = count_words(&body_org);
     let html = serialize_node(&article)?;
+    let word_count = count_html_words(&html);
     let org = build_org_document(&metadata, &body_org, word_count);
     let variables = metadata_variables(&metadata, &["title", "author", "site", "description"]);
 
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("medium"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "medium", variables,
+    )))
 }
 
 fn medium_article(document: &NodeRef) -> Option<NodeRef> {
@@ -6966,14 +7737,11 @@ fn discourse_output(
         .iter()
         .find(|post| has_class_token(post, "topic-owner"))
         .cloned();
-    let mut body = op
-        .as_ref()
-        .map(|post| discourse_post_org(post))
-        .unwrap_or_default();
+    let mut body = op.as_ref().map(discourse_post_org).unwrap_or_default();
 
     let reply_posts = posts
         .iter()
-        .filter(|post| op.as_ref().is_none_or(|op| *post != op))
+        .filter(|post| op.as_ref() != Some(*post))
         .cloned()
         .collect::<Vec<_>>();
     if include_replies.extractor_replies() {
@@ -7007,28 +7775,14 @@ fn discourse_output(
         &["title", "author", "site", "description", "published"],
     );
 
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
+    Ok(Some(extractor_output(
+        metadata,
         html,
         org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("discourse"),
+        word_count,
+        "discourse",
         variables,
-        debug: None,
-        profile: None,
-    }))
+    )))
 }
 
 fn is_discourse_document(document: &NodeRef) -> bool {
@@ -7177,6 +7931,7 @@ fn discourse_comments(posts: &[NodeRef], base_url: &str) -> Vec<HackerNewsCommen
                 url: discourse_post_permalink(post, base_url),
                 score: discourse_like_count(post),
                 org,
+                body_html: String::new(),
             })
         })
         .collect()
@@ -7261,28 +8016,9 @@ fn nytimes_output(
 
     let variables = metadata_variables(&metadata, &["title", "author", "published", "description"]);
 
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("nytimes"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "nytimes", variables,
+    )))
 }
 
 fn is_nytimes_document(document: &NodeRef, provided_url: Option<&str>) -> bool {
@@ -7406,7 +8142,9 @@ fn replace_js_undefined_with_null(input: &str) -> String {
             && input[idx + "undefined".len()..]
                 .chars()
                 .next()
-                .is_none_or(|next| matches!(next, ',' | '}' | ']' | ' ' | '\n' | '\r' | '\t'))
+                .map_or(true, |next| {
+                    matches!(next, ',' | '}' | ']' | ' ' | '\n' | '\r' | '\t')
+                })
         {
             output.push_str("null");
             for _ in 1.."undefined".len() {
@@ -7700,28 +8438,9 @@ fn lwn_output(
         &metadata,
         &["title", "author", "site", "published", "description"],
     );
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("lwn"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "lwn", variables,
+    )))
 }
 
 fn lwn_document_url(document: &NodeRef, provided_url: Option<&str>) -> Option<String> {
@@ -7867,6 +8586,7 @@ fn lwn_comment(comment: &NodeRef, depth: usize, base_url: &str) -> Option<Hacker
         url,
         score,
         org,
+        body_html: String::new(),
     })
 }
 
@@ -7978,33 +8698,14 @@ fn leetcode_output(
     if body_org.trim().is_empty() {
         return Ok(None);
     }
-    let word_count = count_words(&body_org);
     let html = serialize_node(&description)?;
+    let word_count = count_html_words(&html);
     let org = build_org_document(&metadata, &body_org, word_count);
     let variables = metadata_variables(&metadata, &["title", "site"]);
 
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("leetcode"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "leetcode", variables,
+    )))
 }
 
 fn is_leetcode_document(document: &NodeRef, provided_url: Option<&str>) -> bool {
@@ -8133,7 +8834,7 @@ fn x_output(
     let (body_org, html) = if let Some(article) = article {
         (
             x_article_body_org(document, &article, include_images),
-            serialize_node(&article)?,
+            x_article_content_html(document, &article, include_images)?,
         )
     } else {
         (
@@ -8145,34 +8846,24 @@ fn x_output(
         return Ok(None);
     }
 
-    let word_count = count_words(&body_org);
+    let word_count = if extractor_name == "xarticle" {
+        count_html_words(&html)
+    } else {
+        x_timeline_word_count(&tweets, include_replies, &body_org)
+    };
     let org = build_org_document(&metadata, &body_org, word_count);
     let variables = metadata_variables(
         &metadata,
         &["title", "author", "site", "description", "published"],
     );
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
+    Ok(Some(extractor_output(
+        metadata,
         html,
         org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type(extractor_name),
+        word_count,
+        extractor_name,
         variables,
-        debug: None,
-        profile: None,
-    }))
+    )))
 }
 
 fn is_x_document(document: &NodeRef, provided_url: Option<&str>) -> bool {
@@ -8340,12 +9031,97 @@ fn x_article_body_org(document: &NodeRef, article: &NodeRef, include_images: boo
             parts.push(image);
         }
     }
-    standardize_x_article_draft_blocks(article);
+    standardize_x_article_content(article);
     let org = html_node_to_org_with_footnotes(article, &FootnoteState::default());
     if !org.trim().is_empty() {
         parts.push(org.trim().to_string());
     }
     parts.join("\n\n")
+}
+
+fn x_article_content_html(
+    document: &NodeRef,
+    article: &NodeRef,
+    include_images: bool,
+) -> Result<String, DefuddleError> {
+    let header_image = if include_images && count_selector(article, "img") == 0 {
+        x_first_media_url(document)
+            .map(|src| {
+                let alt = select_first_node(document, "[data-testid=\"tweetPhoto\"] img")
+                    .and_then(|image| element_attr(&image, "alt"))
+                    .filter(|alt| !alt.trim().is_empty())
+                    .unwrap_or_else(|| "Image".to_string());
+                format!(
+                    r#"<img src="{}" alt="{}">"#,
+                    escape_html_attr(&src),
+                    escape_html_attr(&normalize_ws(&alt))
+                )
+            })
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    Ok(format!(
+        r#"<article class="x-article">{header_image}{}</article>"#,
+        serialize_node(article)?
+    ))
+}
+
+fn standardize_x_article_content(article: &NodeRef) {
+    standardize_code_blocks(article);
+    standardize_x_article_headers(article);
+    standardize_x_article_bold_spans(article);
+    standardize_x_article_draft_blocks(article);
+    unwrap_x_article_inline_spans(article);
+}
+
+fn standardize_x_article_headers(article: &NodeRef) {
+    let Ok(matches) = article.select("h1, h2, h3, h4, h5, h6") else {
+        return;
+    };
+    let headings = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for heading in headings {
+        let text = normalize_ws(&heading.text_contents());
+        for child in heading.children().collect::<Vec<_>>() {
+            child.detach();
+        }
+        if !text.is_empty() {
+            heading.append(NodeRef::new_text(text));
+        }
+    }
+}
+
+fn standardize_x_article_bold_spans(article: &NodeRef) {
+    let Ok(matches) = article.select("span[style*=\"font-weight: bold\"]") else {
+        return;
+    };
+    let spans = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for span in spans {
+        let Some(strong) = new_html_element("strong") else {
+            continue;
+        };
+        strong.append(NodeRef::new_text(span.text_contents()));
+        span.insert_before(strong);
+        span.detach();
+    }
+}
+
+fn unwrap_x_article_inline_spans(article: &NodeRef) {
+    let Ok(matches) = article.select("span") else {
+        return;
+    };
+    let spans = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for span in spans {
+        if span.parent().is_some() {
+            unwrap_node_children_before(&span);
+        }
+    }
 }
 
 fn standardize_x_article_draft_blocks(article: &NodeRef) {
@@ -8481,15 +9257,10 @@ fn x_timeline_body_org(tweets: &[XTweet], include_replies: IncludeReplies) -> St
         return body;
     }
 
-    let mut comment_start = replies.len();
-    for (idx, reply) in replies.iter().enumerate() {
-        if reply.handle == first.handle && comment_start == replies.len() {
-            body.push_str("\n\n-----\n\n");
-            body.push_str(reply.body_org.trim());
-        } else {
-            comment_start = idx;
-            break;
-        }
+    let comment_start = x_timeline_comment_start(first, replies);
+    for reply in &replies[..comment_start] {
+        body.push_str("\n\n-----\n\n");
+        body.push_str(reply.body_org.trim());
     }
 
     if !include_replies.extractor_replies() || comment_start >= replies.len() {
@@ -8516,6 +9287,40 @@ fn x_timeline_body_org(tweets: &[XTweet], include_replies: IncludeReplies) -> St
         body.push_str("\n#+end_quote\n\n");
     }
     body
+}
+
+fn x_timeline_comment_start(first: &XTweet, replies: &[XTweet]) -> usize {
+    replies
+        .iter()
+        .position(|reply| reply.handle != first.handle)
+        .unwrap_or(replies.len())
+}
+
+fn x_timeline_word_count(
+    tweets: &[XTweet],
+    include_replies: IncludeReplies,
+    body_org: &str,
+) -> usize {
+    let Some((first, replies)) = tweets.split_first() else {
+        return count_words(body_org);
+    };
+    if !include_replies.extractor_replies() || replies.is_empty() {
+        return count_words(body_org);
+    }
+
+    let comment_start = x_timeline_comment_start(first, replies);
+    let metadata_words = replies[comment_start..]
+        .iter()
+        .map(|reply| {
+            let date = reply
+                .published
+                .split('T')
+                .next()
+                .unwrap_or(&reply.published);
+            count_words(&format!("{} {}", reply.display_name, reply.handle)) + count_words(date)
+        })
+        .sum::<usize>();
+    count_words(body_org).saturating_sub(metadata_words)
 }
 
 fn normalize_x_media_images(document: &NodeRef) {
@@ -8615,8 +9420,7 @@ fn x_oembed_author(author_url: &str) -> Option<String> {
     let parsed = Url::parse(author_url).ok()?;
     let handle = parsed
         .path_segments()?
-        .filter(|segment| !segment.is_empty())
-        .next_back()?;
+        .rfind(|segment| !segment.is_empty())?;
     (!handle.trim().is_empty()).then(|| format!("@{}", handle.trim_start_matches('@')))
 }
 
@@ -8764,34 +9568,20 @@ fn x_async_output(
     if body_org.trim().is_empty() {
         return Err(DefuddleError::Json("empty X fallback content".to_string()));
     }
-    let word_count = count_words(&body_org);
+    let word_count = count_html_words(&html);
     let org = build_org_document(&metadata, &body_org, word_count);
     let variables = metadata_variables(
         &metadata,
         &["title", "author", "site", "description", "published"],
     );
-    Ok(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
+    Ok(extractor_output(
+        metadata,
         html,
         org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type(extractor_name),
+        word_count,
+        extractor_name,
         variables,
-        debug: None,
-        profile: None,
-    })
+    ))
 }
 
 fn html_fragment_to_org(html: &str) -> String {
@@ -8825,6 +9615,7 @@ fn remove_empty_elements(root: &NodeRef) {
             || is_inside_preserved_code_block(&node)
             || is_math_node(&node)
             || is_inside_math_tree(&node)
+            || is_empty_footnote_definition_anchor(&node)
         {
             continue;
         }
@@ -8851,6 +9642,37 @@ fn remove_empty_elements(root: &NodeRef) {
             node.detach();
         }
     }
+}
+
+fn is_empty_footnote_definition_anchor(node: &NodeRef) -> bool {
+    if tag_name(node).as_deref() != Some("a") {
+        return false;
+    }
+    let Some(element) = node.as_element() else {
+        return false;
+    };
+    let id = {
+        let attrs = element.attributes.borrow();
+        attrs
+            .get("id")
+            .or_else(|| attrs.get("name"))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let Some(id) = id else {
+        return false;
+    };
+    if looks_like_footnote_definition_id(&id) {
+        return true;
+    }
+
+    node.parent()
+        .filter(|parent| tag_name(parent).as_deref() == Some("li"))
+        .and_then(|li| li.parent())
+        .filter(|ol| tag_name(ol).as_deref() == Some("ol"))
+        .and_then(|ol| previous_element_sibling(&ol))
+        .is_some_and(|heading| is_reference_notes_heading(&heading))
 }
 
 fn should_preserve_empty_inline_space(node: &NodeRef, tag: &str) -> bool {
@@ -9726,28 +10548,9 @@ fn bluesky_output(
         &metadata,
         &["title", "author", "site", "description", "published"],
     );
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("bluesky"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "bluesky", variables,
+    )))
 }
 
 fn bluesky_post_items(screen: &NodeRef) -> Vec<NodeRef> {
@@ -10079,6 +10882,7 @@ fn bluesky_comments(
             url: bluesky_permalink(item, base_url).unwrap_or_default(),
             score: String::new(),
             org,
+            body_html: String::new(),
         });
     }
     comments
@@ -10174,7 +10978,8 @@ fn threads_output(
 
     let body_parts = thread_posts
         .iter()
-        .filter_map(|post| (!post.content.trim().is_empty()).then(|| post.content.clone()))
+        .filter(|post| !post.content.trim().is_empty())
+        .map(|post| post.content.clone())
         .collect::<Vec<_>>();
     let mut body = body_parts.join("\n\n-----\n\n");
     if body.trim().is_empty() {
@@ -10204,28 +11009,9 @@ fn threads_output(
         &metadata,
         &["title", "author", "site", "description", "published"],
     );
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("threads"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "threads", variables,
+    )))
 }
 
 fn is_threads_document(document: &NodeRef, provided_url: Option<&str>) -> bool {
@@ -10292,28 +11078,9 @@ fn threads_region_output(
         &metadata,
         &["title", "author", "site", "description", "published"],
     );
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("threads"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "threads", variables,
+    )))
 }
 
 fn threads_pagelets(document: &NodeRef) -> Vec<NodeRef> {
@@ -10796,6 +11563,7 @@ fn threads_comments(reply_posts: &[Vec<ThreadsPost>]) -> Vec<HackerNewsComment> 
                 url: post.permalink.clone(),
                 score: String::new(),
                 org: post.content.clone(),
+                body_html: String::new(),
             });
         }
     }
@@ -10846,6 +11614,7 @@ fn threads_comments_from_json(document: &NodeRef, main_author: &str) -> Vec<Hack
             url: String::new(),
             score: String::new(),
             org: text,
+            body_html: String::new(),
         });
     }
     comments
@@ -11080,7 +11849,8 @@ fn mastodon_output(
     }
 
     let mut body = mastodon_main_body_org(&main, include_images);
-    let mut comments = Vec::new();
+    let mut post_html_parts = vec![mastodon_post_content_html(&main, include_images)];
+    let mut comment_statuses = Vec::new();
     let mut saw_comments = false;
     for status in mastodon_statuses(document, base_url, include_images) {
         if !saw_comments && status.is_thread_continuation {
@@ -11088,54 +11858,44 @@ fn mastodon_output(
                 body.push_str("\n\n-----\n\n");
                 body.push_str(status.body_org.trim());
             }
+            if !status.body_html.trim().is_empty() {
+                post_html_parts.push(status.body_html.clone());
+            }
             continue;
         }
         saw_comments = true;
         if include_replies.extractor_replies() {
-            comments.push(HackerNewsComment {
-                depth: status.depth,
-                author: status.author,
-                published: status.published,
-                url: status.url,
-                score: String::new(),
-                org: status.body_org,
-            });
+            comment_statuses.push(status);
         }
     }
-    if !comments.is_empty() {
+    if !comment_statuses.is_empty() {
+        let comments = comment_statuses
+            .iter()
+            .map(|status| HackerNewsComment {
+                depth: status.depth,
+                author: status.author.clone(),
+                published: status.published.clone(),
+                url: status.url.clone(),
+                score: String::new(),
+                org: status.body_org.clone(),
+                body_html: status.body_html.clone(),
+            })
+            .collect::<Vec<_>>();
         body.push_str("\n\n-----\n\n** Comments\n\n");
         body.push_str(&render_hn_comments(&comments));
     }
 
-    let word_count = count_words(&body);
-    let html = serialize_node(&main)?;
+    let post_html = post_html_parts.join("\n<hr>\n");
+    let html = mastodon_content_html(&post_html, &comment_statuses);
+    let word_count = count_html_words(&html);
     let org = build_org_document(&metadata, &body, word_count);
     let variables = metadata_variables(
         &metadata,
         &["title", "author", "site", "description", "published"],
     );
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("mastodon"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "mastodon", variables,
+    )))
 }
 
 fn is_mastodon_document(document: &NodeRef, provided_url: Option<&str>) -> bool {
@@ -11214,6 +11974,16 @@ fn remove_mastodon_rendering_noise(document: &NodeRef) {
             node.detach();
         }
     }
+    if let Ok(matches) = document.select(".status__content__text span") {
+        let spans = matches
+            .map(|matched| matched.as_node().clone())
+            .collect::<Vec<_>>();
+        for span in spans {
+            if span.parent().is_some() {
+                unwrap_node_children_before(&span);
+            }
+        }
+    }
 }
 
 fn mastodon_main_body_org(main: &NodeRef, include_images: bool) -> String {
@@ -11229,7 +11999,45 @@ fn mastodon_main_body_org(main: &NodeRef, include_images: bool) -> String {
             parts.push(media);
         }
     }
+    if let Some(card) = mastodon_status_card_org(main, include_images) {
+        parts.push(card);
+    }
     parts.join("\n\n")
+}
+
+fn mastodon_post_content_html(container: &NodeRef, include_images: bool) -> String {
+    let mut parts = Vec::new();
+    if let Some(content) = select_first_node(container, ".status__content__text") {
+        let html = serialize_children_html(&content);
+        if !html.trim().is_empty() {
+            parts.push(html);
+        }
+    }
+    if include_images {
+        if let Some(media) = mastodon_media_gallery_html(container) {
+            parts.push(media);
+        }
+    }
+    if let Some(card) = mastodon_status_card_html(container, include_images) {
+        parts.push(card);
+    }
+    parts.join("\n")
+}
+
+fn mastodon_content_html(post_html: &str, comments: &[MastodonStatus]) -> String {
+    let comments_html = render_mastodon_comments_html(comments);
+    standardized_post_comments_html("mastodon", post_html, &comments_html)
+}
+
+fn standardized_post_comments_html(site: &str, post_html: &str, comments_html: &str) -> String {
+    let comments_section = if comments_html.is_empty() {
+        String::new()
+    } else {
+        format!(r#"<hr><div class="{site} comments"><h2>Comments</h2>{comments_html}</div>"#)
+    };
+    format!(
+        r#"<article data-defuddle=""><div class="{site} post"><div class="post-content">{post_html}</div></div>{comments_section}</article>"#
+    )
 }
 
 fn mastodon_main_media_url(main: &NodeRef) -> Option<String> {
@@ -11269,6 +12077,30 @@ fn mastodon_media_gallery_org(container: &NodeRef) -> Option<String> {
     (!images.is_empty()).then(|| images.join("\n\n"))
 }
 
+fn mastodon_media_gallery_html(container: &NodeRef) -> Option<String> {
+    let Ok(matches) = container.select(".media-gallery__item-thumbnail[href]") else {
+        return None;
+    };
+    let images = matches
+        .filter_map(|matched| {
+            let link = matched.as_node().clone();
+            let href = element_attr(&link, "href")?;
+            if href.trim().is_empty() || is_dangerous_url(&href) {
+                return None;
+            }
+            let alt = select_first_node(&link, "img")
+                .and_then(|image| element_attr(&image, "alt"))
+                .unwrap_or_default();
+            Some(format!(
+                r#"<img src="{}" alt="{}">"#,
+                escape_html_attr(&href),
+                escape_html_attr(alt.trim())
+            ))
+        })
+        .collect::<Vec<_>>();
+    (!images.is_empty()).then(|| images.join("\n"))
+}
+
 #[derive(Debug, Clone)]
 struct MastodonStatus {
     depth: usize,
@@ -11277,6 +12109,7 @@ struct MastodonStatus {
     published: String,
     url: String,
     body_org: String,
+    body_html: String,
 }
 
 fn mastodon_statuses(
@@ -11327,6 +12160,7 @@ fn mastodon_status(
         }
         body_org.push_str(&card);
     }
+    let body_html = mastodon_post_content_html(status, include_images);
     let depth = if has_class_token(status, "status--first-in-thread") {
         0
     } else {
@@ -11340,6 +12174,7 @@ fn mastodon_status(
         published,
         url,
         body_org,
+        body_html,
     })
 }
 
@@ -11371,6 +12206,79 @@ fn mastodon_status_card_org(status: &NodeRef, include_images: bool) -> Option<St
     (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
 
+fn mastodon_status_card_html(status: &NodeRef, include_images: bool) -> Option<String> {
+    let card = select_first_node(status, "a.status-card[href]")?;
+    let href = element_attr(&card, "href")?;
+    if href.trim().is_empty() || is_dangerous_url(&href) {
+        return None;
+    }
+    let title = select_text(&card, ".status-card__title").unwrap_or_else(|| href.clone());
+    let mut parts = Vec::new();
+    if include_images {
+        if let Some(src) = select_first_node(&card, ".status-card__image img")
+            .and_then(|image| element_attr(&image, "src"))
+        {
+            parts.push(format!(
+                r#"<a href="{}"><img src="{}" alt="{}"></a>"#,
+                escape_html_attr(&href),
+                escape_html_attr(&src),
+                escape_html_attr(&title)
+            ));
+        }
+    }
+    parts.push(format!(
+        r#"<p><a href="{}">{}</a></p>"#,
+        escape_html_attr(&href),
+        escape_html_text(&title)
+    ));
+    if let Some(description) = select_text(&card, ".status-card__description") {
+        parts.push(format!("<p>{}</p>", escape_html_text(&description)));
+    }
+    Some(parts.join("\n"))
+}
+
+fn render_mastodon_comments_html(comments: &[MastodonStatus]) -> String {
+    let mut out = String::new();
+    let mut open_depth = 0usize;
+    for comment in comments {
+        let target_depth = comment.depth + 1;
+        while open_depth >= target_depth && open_depth > 0 {
+            out.push_str("</blockquote>");
+            open_depth -= 1;
+        }
+        while open_depth < target_depth {
+            out.push_str("<blockquote>");
+            open_depth += 1;
+        }
+        out.push_str(&mastodon_comment_html(comment));
+    }
+    while open_depth > 0 {
+        out.push_str("</blockquote>");
+        open_depth -= 1;
+    }
+    out
+}
+
+fn mastodon_comment_html(comment: &MastodonStatus) -> String {
+    let date = if comment.url.is_empty() || is_dangerous_url(&comment.url) {
+        format!(
+            r#"<span class="comment-date">{}</span>"#,
+            escape_html_text(&comment.published)
+        )
+    } else {
+        format!(
+            r#"<a href="{}" class="comment-link">{}</a>"#,
+            escape_html_attr(&comment.url),
+            escape_html_text(&comment.published)
+        )
+    };
+    format!(
+        r#"<div class="comment"><div class="comment-metadata"><span class="comment-author"><strong>{}</strong></span> · {date}</div><div class="comment-content">{}</div></div>"#,
+        escape_html_text(&comment.author),
+        comment.body_html
+    )
+}
+
 fn reddit_output(
     document: &NodeRef,
     provided_url: Option<&str>,
@@ -11391,43 +12299,36 @@ fn reddit_output(
     if !include_images {
         remove_content_images(document);
     }
-    let mut body = select_first_node(&post, ".entry .usertext-body .md")
-        .map(|node| html_children_to_org_with_footnotes(&node, &FootnoteState::default()))
+    let post_body = select_first_node(&post, ".entry .usertext-body .md");
+    let mut body = post_body
+        .as_ref()
+        .map(|node| html_children_to_org_with_footnotes(node, &FootnoteState::default()))
         .unwrap_or_default();
-    if include_replies.extractor_replies() {
-        let comments = reddit_comments(document, base_url);
-        if !comments.is_empty() {
-            body.push_str("\n-----\n\n** Comments\n\n");
-            body.push_str(&render_hn_comments(&comments));
-        }
+    let comments = if include_replies.extractor_replies() {
+        reddit_comments(document, base_url)
+    } else {
+        Vec::new()
+    };
+    if !comments.is_empty() {
+        body.push_str("\n-----\n\n** Comments\n\n");
+        body.push_str(&render_hn_comments(&comments));
     }
 
-    let word_count = count_words(&body);
-    let html = serialize_node(&post)?;
+    let post_html = post_body
+        .as_ref()
+        .map(serialize_children_html)
+        .unwrap_or_default();
+    let html = standardized_post_comments_html(
+        "reddit",
+        &post_html,
+        &render_standardized_comments_html(&comments),
+    );
+    let word_count = count_html_words(&html);
     let org = build_org_document(&metadata, &body, word_count);
     let variables = metadata_variables(&metadata, &["title", "author", "site", "description"]);
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("reddit"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "reddit", variables,
+    )))
 }
 
 fn is_reddit_document(document: &NodeRef, provided_url: Option<&str>) -> bool {
@@ -11494,8 +12395,14 @@ fn reddit_comment(comment: &NodeRef, base_url: &str) -> Option<HackerNewsComment
         .and_then(|href| absolutize_url(Some(base_url), &href))
         .unwrap_or_default();
     let score = select_text(&entry, ".score").unwrap_or_default();
-    let org = select_first_node(&entry, ".usertext-body .md")
-        .map(|node| html_children_to_org_with_footnotes(&node, &FootnoteState::default()))
+    let content = select_first_node(&entry, ".usertext-body .md");
+    let org = content
+        .as_ref()
+        .map(|node| html_children_to_org_with_footnotes(node, &FootnoteState::default()))
+        .unwrap_or_default();
+    let body_html = content
+        .as_ref()
+        .map(serialize_children_html)
         .unwrap_or_default();
     let depth = comment
         .ancestors()
@@ -11511,6 +12418,7 @@ fn reddit_comment(comment: &NodeRef, base_url: &str) -> Option<HackerNewsComment
         url,
         score,
         org,
+        body_html,
     })
 }
 
@@ -11537,9 +12445,9 @@ fn chatgpt_output(
     let mut body = String::new();
     let mut rendered_messages = 0usize;
 
-    for turn in turns {
-        let author = chatgpt_turn_author(&turn).unwrap_or_else(|| "ChatGPT said".to_string());
-        let content_nodes = chatgpt_turn_content_nodes(&turn);
+    for turn in &turns {
+        let author = chatgpt_turn_author(turn).unwrap_or_else(|| "ChatGPT said".to_string());
+        let content_nodes = chatgpt_turn_content_nodes(turn);
         if content_nodes.is_empty() {
             continue;
         }
@@ -11580,35 +12488,159 @@ fn chatgpt_output(
         append_conversation_citation_footnotes(&mut body, &citations);
     }
 
-    let word_count = count_words(&body);
+    let html = chatgpt_content_html(&turns, &citations)?;
+    let word_count = count_html_words(&html);
     let org = build_org_document(&metadata, &body, word_count);
     let variables = conversation_variables(&metadata, word_count);
-    let html = select_first_node(document, "main")
-        .map(|node| serialize_node(&node))
-        .unwrap_or_else(|| serialize_node(document))?;
 
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("chatgpt"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "chatgpt", variables,
+    )))
+}
+
+fn chatgpt_content_html(
+    turns: &[NodeRef],
+    citations: &[ConversationCitation],
+) -> Result<String, DefuddleError> {
+    let mut refs = vec![Vec::<String>::new(); citations.len()];
+    let mut rendered = Vec::new();
+    for turn in turns {
+        let author = chatgpt_turn_author(turn).unwrap_or_else(|| "ChatGPT said".to_string());
+        let content_nodes = chatgpt_turn_content_nodes(turn);
+        if content_nodes.is_empty() {
+            continue;
+        }
+        let mut content_html = String::new();
+        for node in content_nodes {
+            chatgpt_standardize_citation_nodes(&node, citations, &mut refs);
+            chatgpt_clean_content_html_node(&node);
+            content_html.push_str(&serialize_node(&node)?);
+        }
+        if content_html.trim().is_empty() {
+            continue;
+        }
+        rendered.push(format!(
+            "<p><strong>{}</strong></p>{content_html}",
+            escape_html_text(&author)
+        ));
+    }
+
+    let mut html = format!("<article>{}</article>", rendered.join("<hr>"));
+    if !citations.is_empty() {
+        let footnotes = chatgpt_citation_footnotes_html(citations, &refs);
+        html = html.replacen("</article>", &format!("{footnotes}</article>"), 1);
+    }
+    Ok(html)
+}
+
+fn chatgpt_standardize_citation_nodes(
+    node: &NodeRef,
+    citations: &[ConversationCitation],
+    refs: &mut [Vec<String>],
+) {
+    let Ok(matches) = node.select("a[href][target=\"_blank\"][rel]") else {
+        return;
+    };
+    let links = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for link in links {
+        let Some(url) = element_attr(&link, "href") else {
+            continue;
+        };
+        let Some(index) = citations.iter().position(|citation| citation.url == url) else {
+            continue;
+        };
+        let Some(pill) = link.ancestors().find(|ancestor| {
+            element_attr(ancestor, "data-testid").as_deref() == Some("webpage-citation-pill")
+        }) else {
+            continue;
+        };
+        let target = pill
+            .parent()
+            .filter(|parent| {
+                tag_name(parent).as_deref() == Some("span")
+                    && element_attr(parent, "data-state").is_some()
+            })
+            .unwrap_or(pill);
+        let reference_number = index + 1;
+        let occurrence = refs[index].len() + 1;
+        let ref_id = if occurrence == 1 {
+            format!("fnref:{reference_number}")
+        } else {
+            format!("fnref:{reference_number}-{occurrence}")
+        };
+        let Some(sup) = new_html_element("sup") else {
+            continue;
+        };
+        let Some(anchor) = new_html_element("a") else {
+            continue;
+        };
+        if let Some(element) = sup.as_element() {
+            element.attributes.borrow_mut().insert("id", ref_id.clone());
+        }
+        if let Some(element) = anchor.as_element() {
+            element
+                .attributes
+                .borrow_mut()
+                .insert("href", format!("#fn:{reference_number}"));
+        }
+        anchor.append(NodeRef::new_text(reference_number.to_string()));
+        sup.append(anchor);
+        target.insert_before(sup);
+        target.detach();
+        refs[index].push(ref_id);
+    }
+}
+
+fn chatgpt_clean_content_html_node(node: &NodeRef) {
+    for selector in ["button", "img:not([src])"] {
+        let Ok(matches) = node.select(selector) else {
+            continue;
+        };
+        let nodes = matches
+            .map(|matched| matched.as_node().clone())
+            .collect::<Vec<_>>();
+        for matched in nodes {
+            matched.detach();
+        }
+    }
+    let Ok(matches) = node.select("span") else {
+        return;
+    };
+    let spans = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for span in spans {
+        if span.parent().is_some() {
+            unwrap_node_children_before(&span);
+        }
+    }
+}
+
+fn chatgpt_citation_footnotes_html(
+    citations: &[ConversationCitation],
+    refs: &[Vec<String>],
+) -> String {
+    let mut html = String::from(r#"<div id="footnotes"><ol>"#);
+    for (index, citation) in citations.iter().enumerate() {
+        let number = index + 1;
+        html.push_str(&format!(
+            r#"<li id="fn:{number}"><p><a href="{}"><a href="{}">{}</a></a>"#,
+            escape_html_attr(&citation.url),
+            escape_html_attr(&citation.url),
+            escape_html_text(&citation.label)
+        ));
+        for ref_id in &refs[index] {
+            html.push_str(&format!(
+                r##" <a class="footnote-backref" title="return to article" href="#{}">↩</a>"##,
+                escape_html_attr(ref_id)
+            ));
+        }
+        html.push_str("</p></li>");
+    }
+    html.push_str("</ol></div>");
+    html
 }
 
 fn chatgpt_turns(document: &NodeRef) -> Vec<NodeRef> {
@@ -11678,7 +12710,7 @@ fn chatgpt_turn_content_nodes(turn: &NodeRef) -> Vec<NodeRef> {
 fn chatgpt_message_belongs_to_turn(message: &NodeRef, turn: &NodeRef) -> bool {
     message
         .ancestors()
-        .find(|ancestor| is_chatgpt_turn_node(ancestor))
+        .find(is_chatgpt_turn_node)
         .is_some_and(|ancestor| ancestor == *turn)
 }
 
@@ -11849,28 +12881,9 @@ fn claude_output(
         .map(|node| serialize_node(&node))
         .unwrap_or_else(|| serialize_node(document))?;
 
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("claude"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "claude", variables,
+    )))
 }
 
 fn claude_messages(document: &NodeRef) -> Vec<ConversationNodeMessage> {
@@ -12006,28 +13019,9 @@ fn gemini_output(
         .map(|node| serialize_node(&node))
         .unwrap_or_else(|| serialize_node(document))?;
 
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("gemini"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "gemini", variables,
+    )))
 }
 
 fn gemini_messages(document: &NodeRef) -> Vec<ConversationNodeMessage> {
@@ -12187,28 +13181,9 @@ fn grok_output(
         .map(|node| serialize_node(&node))
         .unwrap_or_else(|| serialize_node(document))?;
 
-    Ok(Some(DefuddleOutput {
-        title: metadata.title,
-        description: metadata.description,
-        author: metadata.author,
-        published: metadata.published,
-        site: metadata.site,
-        url: metadata.url,
-        domain: metadata.domain,
-        favicon: metadata.favicon,
-        image: metadata.image,
-        language: metadata.language,
-        word_count,
-        parse_time: 0,
-        html,
-        org,
-        content_markdown: String::new(),
-        frontmatter: String::new(),
-        extractor_type: extractor_type("grok"),
-        variables,
-        debug: None,
-        profile: None,
-    }))
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, "grok", variables,
+    )))
 }
 
 fn grok_message_containers(document: &NodeRef) -> Vec<NodeRef> {
@@ -12656,8 +13631,7 @@ fn metadata_line_date(line: &MetadataLine) -> Option<String> {
 fn is_author_metadata_line(line: &MetadataLine) -> bool {
     let text = line.text.trim();
     let words = count_words(&line.text);
-    if words < 2
-        || words > 30
+    if !(2..=30).contains(&words)
         || line.link_count != 0
         || is_standalone_date(text)
         || is_read_time(text)
@@ -14223,9 +15197,6 @@ fn remove_partial_noise(
             if main.is_some_and(|main| node == main || is_descendant_of(main, node)) {
                 return None;
             }
-            if is_heading_node(node) {
-                return None;
-            }
             if tag_name(node)
                 .as_deref()
                 .is_some_and(|tag| matches!(tag, "pre" | "code"))
@@ -14373,7 +15344,7 @@ fn is_low_scoring_likely_content(node: &NodeRef) -> bool {
     let attrs = element_attr_string(element).to_ascii_lowercase();
     if attrs
         .split_whitespace()
-        .any(|token| is_low_scoring_content_indicator(token))
+        .any(is_low_scoring_content_indicator)
     {
         return true;
     }
@@ -14382,7 +15353,7 @@ fn is_low_scoring_likely_content(node: &NodeRef) -> bool {
     }
 
     let text = normalize_ws(&node.text_contents());
-    let words = count_words(&text);
+    let words = count_node_words(node);
     if is_non_content_heading_wrapper(node, &text) {
         return false;
     }
@@ -14584,7 +15555,9 @@ fn has_excluded_social_action_path(href: &str, host: &str, action: &str) -> bool
     let Some(rest) = path.strip_prefix(action) else {
         return false;
     };
-    rest.chars().next().is_none_or(|ch| !is_regex_word_char(ch))
+    rest.chars()
+        .next()
+        .map_or(true, |ch| !is_regex_word_char(ch))
 }
 
 fn is_regex_word_char(ch: char) -> bool {
@@ -14736,6 +15709,7 @@ fn is_pronunciation_annotation_node(node: &NodeRef) -> bool {
 }
 
 fn sanitize_links(document: &NodeRef) {
+    unwrap_dangerous_anchors(document);
     sanitize_element_attributes(document);
     let Ok(matches) = document.select("*") else {
         return;
@@ -14743,6 +15717,33 @@ fn sanitize_links(document: &NodeRef) {
     for node in matches {
         sanitize_element_attributes(node.as_node());
     }
+}
+
+fn unwrap_dangerous_anchors(document: &NodeRef) {
+    let Ok(matches) = document.select("a[href]") else {
+        return;
+    };
+    let nodes = matches
+        .filter_map(|matched| {
+            let node = matched.as_node();
+            let element = node.as_element()?;
+            let attrs = element.attributes.borrow();
+            let href = attrs.get("href")?;
+            (is_dangerous_url(href) && !is_javascript_footnote_anchor(node)).then(|| node.clone())
+        })
+        .collect::<Vec<_>>();
+
+    for node in nodes {
+        if node.parent().is_some() {
+            unwrap_node_children_before(&node);
+        }
+    }
+}
+
+fn is_javascript_footnote_anchor(node: &NodeRef) -> bool {
+    has_class_token(node, "footnoteref")
+        || has_ancestor_class(node, "footnote-footer")
+        || has_ancestor_class(node, "footnotes-footer")
 }
 
 fn sanitize_element_attributes(node: &NodeRef) {
@@ -14851,14 +15852,14 @@ fn normalize_svg_css_attr(attrs: &mut kuchiki::Attributes, name: &str) {
 
 fn apply_svg_class_fallbacks(attrs: &mut kuchiki::Attributes, class: &str) {
     let tokens = class.split_whitespace().collect::<Vec<_>>();
-    if tokens.iter().any(|token| *token == "gridline") {
+    if tokens.contains(&"gridline") {
         attrs.insert("stroke-opacity", "0.2".to_string());
         attrs.insert("stroke", "currentColor".to_string());
     }
-    if tokens.iter().any(|token| *token == "path-area") {
+    if tokens.contains(&"path-area") {
         attrs.insert("fill", "none".to_string());
     }
-    if tokens.iter().any(|token| *token == "path-line") {
+    if tokens.contains(&"path-line") {
         attrs.insert("stroke", "currentColor".to_string());
         attrs.insert("fill", "none".to_string());
     }
@@ -14993,6 +15994,20 @@ fn standardize_drop_caps(root: &NodeRef) {
     }
 }
 
+fn standardize_caps_spans(root: &NodeRef) {
+    let Ok(matches) = root.select("span.caps") else {
+        return;
+    };
+    let nodes = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for span in nodes {
+        if span.parent().is_some() {
+            unwrap_node_children_before(&span);
+        }
+    }
+}
+
 fn standardize_spaces(root: &NodeRef) {
     let text_nodes = root
         .descendants()
@@ -15036,12 +16051,17 @@ fn standardize_headings(root: &NodeRef, title: &str) {
         if heading.parent().is_none() {
             continue;
         }
+        if is_footnote_heading(&heading) {
+            continue;
+        }
         let Some(replacement) = new_html_element("h2") else {
             continue;
         };
         copy_standardized_paragraph_attributes(&heading, &replacement);
         replace_node_transferring_children(&heading, replacement);
     }
+
+    simplify_heading_contents(root);
 
     let normalized_title = normalize_human_text(title);
     if normalized_title.is_empty() {
@@ -15052,6 +16072,38 @@ fn standardize_headings(root: &NodeRef, title: &str) {
     };
     if normalize_human_text(&first_h2.text_contents()) == normalized_title {
         first_h2.detach();
+    }
+}
+
+fn simplify_heading_contents(root: &NodeRef) {
+    let Ok(matches) = root.select("h1, h2, h3, h4, h5, h6") else {
+        return;
+    };
+    let headings = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for heading in headings {
+        if is_footnote_heading(&heading) || has_class_token(&heading, "footnote-body-heading") {
+            continue;
+        }
+        let Some(tag) = tag_name(&heading) else {
+            continue;
+        };
+        let Some(replacement) = new_html_element(&tag) else {
+            continue;
+        };
+        copy_standardized_paragraph_attributes(&heading, &replacement);
+        if has_class_token(&heading, "footnote-body-heading") {
+            replacement
+                .as_element()
+                .unwrap()
+                .attributes
+                .borrow_mut()
+                .insert("class", "footnote-body-heading".to_string());
+        }
+        replacement.append(NodeRef::new_text(normalize_ws(&heading.text_contents())));
+        heading.insert_before(replacement);
+        heading.detach();
     }
 }
 
@@ -15170,6 +16222,148 @@ fn standardize_block_spans(root: &NodeRef) {
             replace_node_transferring_children(&node, replacement);
         }
     }
+}
+
+fn standardize_bare_spans(root: &NodeRef) {
+    let Ok(matches) = root.select("span") else {
+        return;
+    };
+    let mut nodes = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    nodes.reverse();
+    for node in nodes {
+        if node.parent().is_some() && !span_has_upstream_preserved_attributes(&node) {
+            unwrap_node_children_before(&node);
+        }
+    }
+    normalize_adjacent_text_nodes(root);
+}
+
+fn normalize_adjacent_text_nodes(root: &NodeRef) {
+    let parents = std::iter::once(root.clone())
+        .chain(root.descendants())
+        .filter(|node| matches!(node.data(), NodeData::Document(_) | NodeData::Element(_)))
+        .collect::<Vec<_>>();
+    for parent in parents {
+        let mut previous_text: Option<NodeRef> = None;
+        for child in parent.children().collect::<Vec<_>>() {
+            let NodeData::Text(text) = child.data() else {
+                previous_text = None;
+                continue;
+            };
+            if text.borrow().is_empty() {
+                child.detach();
+                continue;
+            }
+            if let Some(previous) = previous_text.as_ref() {
+                let NodeData::Text(previous_value) = previous.data() else {
+                    unreachable!();
+                };
+                previous_value.borrow_mut().push_str(&text.borrow());
+                child.detach();
+            } else {
+                previous_text = Some(child);
+            }
+        }
+    }
+}
+
+fn span_has_upstream_preserved_attributes(node: &NodeRef) -> bool {
+    let Some(element) = node.as_element() else {
+        return false;
+    };
+    element.attributes.borrow().map.iter().any(|(name, value)| {
+        let name = name.local.as_ref().to_ascii_lowercase();
+        let value = value.value.as_str();
+        upstream_allows_attribute(&name)
+            || name == "data-definition"
+            || (name == "id"
+                && (value.starts_with("fnref:")
+                    || value.starts_with("fn:")
+                    || value == "footnotes"))
+            || (name == "class"
+                && (value == "footnote-backref"
+                    || value.split_ascii_whitespace().any(|token| {
+                        let token = token.to_ascii_lowercase();
+                        token.contains("footnote")
+                            || token.contains("sidenote")
+                            || token == "cite-bracket"
+                            || token == "ltx_bibblock"
+                    })
+                    || value
+                        .split_ascii_whitespace()
+                        .any(|token| token == "callout" || token.starts_with("callout-"))))
+    })
+}
+
+fn upstream_allows_attribute(name: &str) -> bool {
+    matches!(
+        name,
+        "alt"
+            | "allow"
+            | "allowfullscreen"
+            | "aria-label"
+            | "checked"
+            | "colspan"
+            | "controls"
+            | "data-latex"
+            | "data-src"
+            | "data-srcset"
+            | "data-callout"
+            | "data-callout-fold"
+            | "data-callout-title"
+            | "data-lang"
+            | "dir"
+            | "display"
+            | "frameborder"
+            | "headers"
+            | "height"
+            | "href"
+            | "kind"
+            | "label"
+            | "lang"
+            | "role"
+            | "rowspan"
+            | "src"
+            | "srclang"
+            | "srcset"
+            | "start"
+            | "title"
+            | "type"
+            | "width"
+            | "accent"
+            | "accentunder"
+            | "align"
+            | "columnalign"
+            | "columnlines"
+            | "columnspacing"
+            | "columnspan"
+            | "data-mjx-texclass"
+            | "depth"
+            | "displaystyle"
+            | "fence"
+            | "frame"
+            | "framespacing"
+            | "linethickness"
+            | "lspace"
+            | "mathsize"
+            | "mathvariant"
+            | "maxsize"
+            | "minsize"
+            | "movablelimits"
+            | "notation"
+            | "rowalign"
+            | "rowlines"
+            | "rowspacing"
+            | "rspace"
+            | "scriptlevel"
+            | "separator"
+            | "stretchy"
+            | "symmetric"
+            | "voffset"
+            | "xmlns"
+    )
 }
 
 fn style_declares_display_block(style: &str) -> bool {
@@ -16282,9 +17476,7 @@ fn normalize_custom_image_elements(document: &NodeRef) {
 fn uni_image_full_width_figure(node: &NodeRef) -> Option<NodeRef> {
     let original = select_first_node(node, "img")?;
     let src = uni_image_best_src(&original)?;
-    let Some((figure, figcaption)) = empty_figure_nodes() else {
-        return None;
-    };
+    let (figure, figcaption) = empty_figure_nodes()?;
     let img = empty_img_node()?;
     if let Some(element) = img.as_element() {
         let mut attrs = element.attributes.borrow_mut();
@@ -17086,6 +18278,7 @@ fn remove_content_patterns(
     remove_promotional_banner_links(main, &mut debug_removals);
     remove_hero_header_blocks(main, &mut debug_removals);
     remove_audio_player_widgets(main, &mut debug_removals);
+    remove_comment_widgets(main, &mut debug_removals);
     remove_timezone_widgets(main, &mut debug_removals);
     remove_pinned_labels(main, &mut debug_removals);
     remove_article_metadata_header_blocks(main, &mut debug_removals);
@@ -17114,6 +18307,45 @@ fn remove_content_patterns(
     remove_trailing_related_posts_blocks(main, &mut debug_removals);
     remove_trailing_thin_sections(main, &mut debug_removals);
     remove_trailing_non_content(main, &mut debug_removals);
+}
+
+fn remove_comment_widgets(main: &NodeRef, debug_removals: &mut Option<&mut Vec<DebugRemoval>>) {
+    for node in comment_widget_nodes(main) {
+        if node.parent().is_some() {
+            detach_content_pattern(debug_removals, "comment widget", &node);
+        }
+    }
+}
+
+fn remove_comment_widgets_by_selector(
+    main: &NodeRef,
+    debug_removals: &mut Option<&mut Vec<DebugRemoval>>,
+) {
+    for node in comment_widget_nodes(main) {
+        if node.parent().is_some() {
+            record_debug_removal(
+                debug_removals,
+                "removeBySelector",
+                Some("comment"),
+                Some("comment widget selector match"),
+                &node,
+            );
+            node.detach();
+        }
+    }
+}
+
+fn comment_widget_nodes(main: &NodeRef) -> Vec<NodeRef> {
+    main.descendants()
+        .filter(is_comment_widget_node)
+        .filter(|node| {
+            node.parent()
+                .into_iter()
+                .flat_map(|parent| parent.ancestors())
+                .take_while(|ancestor| ancestor != main)
+                .all(|ancestor| !is_comment_widget_node(&ancestor))
+        })
+        .collect()
 }
 
 fn detach_content_pattern(
@@ -17250,7 +18482,7 @@ fn is_promotional_banner_link(node: &NodeRef) -> bool {
     }
     if element_attr(node, "href")
         .as_deref()
-        .is_none_or(|href| href.trim().is_empty())
+        .map_or(true, |href| href.trim().is_empty())
     {
         return false;
     }
@@ -17461,7 +18693,7 @@ fn is_article_metadata_header_block(main: &NodeRef, node: &NodeRef) -> bool {
 
     node.select("p, h1, h2, h3, h4, h5, h6")
         .ok()
-        .is_none_or(|blocks| {
+        .map_or(true, |blocks| {
             !blocks
                 .into_iter()
                 .any(|block| count_words(&block.as_node().text_contents()) > 8)
@@ -17586,9 +18818,8 @@ fn remove_see_also_sections(main: &NodeRef, debug_removals: &mut Option<&mut Vec
             if heading_level_in_subtree(&sibling).is_some_and(|next| next <= level) {
                 break;
             }
-            if sibling.as_element().is_some() {
-                to_remove.push(sibling);
-            } else if matches!(sibling.data(), NodeData::Text(text) if text.borrow().trim().is_empty())
+            if sibling.as_element().is_some()
+                || matches!(sibling.data(), NodeData::Text(text) if text.borrow().trim().is_empty())
             {
                 to_remove.push(sibling);
             }
@@ -17744,10 +18975,7 @@ fn is_trailing_related_posts_block(node: &NodeRef) -> bool {
         }
         paragraphs.push(child);
     }
-    paragraphs.len() >= 2
-        && paragraphs
-            .iter()
-            .all(|paragraph| is_link_dense_related_paragraph(paragraph))
+    paragraphs.len() >= 2 && paragraphs.iter().all(is_link_dense_related_paragraph)
 }
 
 fn is_link_dense_related_paragraph(paragraph: &NodeRef) -> bool {
@@ -18828,11 +20056,15 @@ fn remove_trailing_non_content(
     debug_removals: &mut Option<&mut Vec<DebugRemoval>>,
 ) {
     if let Ok(matches) = main.select("table") {
-        let separator_tables = matches
+        let tables = matches
             .map(|matched| matched.as_node().clone())
-            .filter(is_trailing_separator_layout_table)
+            .filter(|table| {
+                is_trailing_separator_layout_table(table)
+                    || is_legacy_related_layout_table(table)
+                        && follows_trailing_related_label(table)
+            })
             .collect::<Vec<_>>();
-        for table in separator_tables {
+        for table in tables {
             detach_content_pattern(debug_removals, "trailing non-content", &table);
         }
     }
@@ -19183,8 +20415,7 @@ fn is_pre_content_author_byline(node: &NodeRef) -> bool {
     }
     let text = normalize_ws(&node.text_contents());
     let words = count_words(&text);
-    words >= 2
-        && words <= 15
+    (2..=15).contains(&words)
         && STARTS_WITH_BY_RE.is_match(&text)
         && !text.ends_with(['.', '!', '?'])
 }
@@ -19485,7 +20716,7 @@ fn is_trailing_author_contact_node(node: &NodeRef) -> bool {
     let text = normalize_ws(&node.text_contents());
     let text_lc = text.to_ascii_lowercase();
     let words = count_words(&text);
-    if !(2..=40).contains(&words) {
+    if words == 0 || words > 40 {
         return false;
     }
     if has_contact_signal {
@@ -20301,7 +21532,7 @@ fn normalize_callout_kind(kind: &str) -> String {
         "summary" | "tldr" => "abstract".to_string(),
         "error" => "danger".to_string(),
         "warn" => "warning".to_string(),
-        other if other.is_empty() => "note".to_string(),
+        "" => "note".to_string(),
         other => other.to_string(),
     }
 }
@@ -22544,7 +23775,7 @@ impl MarkdownRenderer {
         let href = attrs.get("href").map(str::to_owned);
         let title = attrs.get("title").map(str::to_owned);
         drop(attrs);
-        if href.as_deref().is_none_or(is_dangerous_url) {
+        if href.as_deref().map_or(true, is_dangerous_url) {
             for child in node.children() {
                 self.render_node(&child, true);
             }
@@ -23137,6 +24368,7 @@ struct FootnoteState {
     entries: Vec<FootnoteEntry>,
     by_id: HashMap<String, usize>,
     numbers: HashSet<usize>,
+    reference_counts: HashMap<usize, usize>,
     definition_nodes: HashSet<usize>,
     noise_nodes: HashSet<usize>,
     preserve_separator_before_definitions: bool,
@@ -23245,12 +24477,10 @@ impl<'a> OrgRenderer<'a> {
                 return;
             }
         }
-        if !inline {
-            if self.options.standardize {
-                if let Some(callout) = callout_info(node, element) {
-                    self.render_callout(node, callout);
-                    return;
-                }
+        if !inline && self.options.standardize {
+            if let Some(callout) = callout_info(node, element) {
+                self.render_callout(node, callout);
+                return;
             }
         }
 
@@ -23713,7 +24943,7 @@ impl<'a> OrgRenderer<'a> {
         if text.trim().is_empty() {
             return;
         }
-        let language = language.or_else(|| infer_code_language_from_text(&text));
+        let language = language.or_else(|| infer_code_language_from_text(text));
         self.ensure_blank_line();
         self.out.push_str("#+begin_src");
         if let Some(language) = language {
@@ -23897,10 +25127,8 @@ impl<'a> OrgRenderer<'a> {
             matched = true;
         }
 
-        if matched {
-            if last < text.len() {
-                self.push_plain_text(&text[last..]);
-            }
+        if matched && last < text.len() {
+            self.push_plain_text(&text[last..]);
         }
         matched
     }
@@ -24045,6 +25273,7 @@ fn collect_footnotes(root: &NodeRef) -> FootnoteState {
     let mut state = FootnoteState::default();
     collect_arxiv_bibliography_footnotes(root, &mut state);
     collect_structured_footnotes(root, &mut state);
+    collect_easy_footnote_wrapper_fallbacks(root, &mut state);
     collect_named_anchor_footnotes(root, &mut state);
     collect_footnote_definition_divs(root, &mut state);
     collect_orgmode_css_footnotes(root, &mut state);
@@ -24056,10 +25285,57 @@ fn collect_footnotes(root: &NodeRef) -> FootnoteState {
     collect_class_paragraph_footnotes(root, &mut state);
     collect_margin_toggle_footnotes(root, &mut state);
     collect_inline_span_footnotes(root, &mut state);
-    collect_loose_paragraph_footnotes(root, &mut state);
     collect_word_export_footnotes(root, &mut state);
+    collect_loose_paragraph_footnotes(root, &mut state);
     collect_sidenote_noise_nodes(root, &mut state);
+    for reference in structured_footnote_reference_candidates(root, &state) {
+        for number in reference.numbers {
+            *state.reference_counts.entry(number).or_default() += 1;
+        }
+    }
     state
+}
+
+fn adopt_external_footnotes(main: &NodeRef, root: &NodeRef) {
+    if is_html_or_body_node(main) {
+        return;
+    }
+    let Ok(matches) = root.select("div, section, aside") else {
+        return;
+    };
+    let candidates = matches
+        .filter_map(|matched| {
+            let node = matched.as_node().clone();
+            is_external_footnote_section(&node, main).then_some(node)
+        })
+        .collect::<Vec<_>>();
+    for candidate in candidates {
+        remove_adopted_footnote_heading(&candidate);
+        main.append(candidate);
+    }
+}
+
+fn is_external_footnote_section(node: &NodeRef, main: &NodeRef) -> bool {
+    if node == main || is_descendant_of(node, main) || is_descendant_of(main, node) {
+        return false;
+    }
+    let Some(element) = node.as_element() else {
+        return false;
+    };
+    let attrs = element_attr_string(element).to_ascii_lowercase();
+    if !attrs.contains("footnote") {
+        return false;
+    }
+    select_first_node(node, "h1, h2, h3, h4, h5, h6")
+        .is_some_and(|heading| is_footnote_heading(&heading))
+}
+
+fn remove_adopted_footnote_heading(node: &NodeRef) {
+    if let Some(heading) =
+        select_first_node(node, "h1, h2, h3, h4, h5, h6").filter(is_footnote_heading)
+    {
+        heading.detach();
+    }
 }
 
 fn collect_arxiv_bibliography_footnotes(root: &NodeRef, state: &mut FootnoteState) {
@@ -24135,6 +25411,32 @@ fn collect_structured_footnotes(root: &NodeRef, state: &mut FootnoteState) {
         add_footnote_entry(state, id, node.clone(), None);
         mark_definition_container(state, &node);
         mark_google_docs_footnote_wrapper(state, &node);
+    }
+}
+
+fn collect_easy_footnote_wrapper_fallbacks(root: &NodeRef, state: &mut FootnoteState) {
+    let Ok(matches) = root.select("ol.easy-footnotes-wrapper") else {
+        return;
+    };
+    for matched in matches {
+        let ol = matched.as_node().clone();
+        let mut added = false;
+        for (index, item) in element_children(&ol).into_iter().enumerate() {
+            if tag_name(&item).as_deref() != Some("li") {
+                continue;
+            }
+            let number = index + 1;
+            add_footnote_entry(
+                state,
+                format!("easy-footnote-bottom-{number}"),
+                item,
+                Some(number),
+            );
+            added = true;
+        }
+        if added {
+            state.definition_nodes.insert(node_key(&ol));
+        }
     }
 }
 
@@ -24221,14 +25523,31 @@ fn collect_dhammatalks_note_footnotes(root: &NodeRef, state: &mut FootnoteState)
         let Some(id) = node_id(&node) else {
             continue;
         };
-        let Some(number) = leading_text_footnote_marker_number(&node) else {
+        let Some(number) = leading_text_footnote_marker_number(&node)
+            .or_else(|| dhammatalks_note_number_from_id(&id))
+        else {
             continue;
         };
         strip_leading_text_footnote_marker(&node);
         let content_nodes = dhammatalks_note_content_nodes(&node);
+        if let Some(last) = content_nodes.last() {
+            trim_footnote_edge_punctuation(last);
+        }
         add_footnote_entry_nodes(state, id, content_nodes, Some(number));
         mark_nearest_ancestor_class(state, &node, "note");
     }
+}
+
+fn dhammatalks_note_number_from_id(id: &str) -> Option<usize> {
+    static DHAMMATALKS_NOTE_ID_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)^[a-z]+\d+(?:_\d+)?note0*(\d+)$").unwrap());
+    let number = DHAMMATALKS_NOTE_ID_RE
+        .captures(id)?
+        .get(1)?
+        .as_str()
+        .parse::<usize>()
+        .ok()?;
+    (number > 0).then_some(number)
 }
 
 fn collect_data_definition_footnotes(root: &NodeRef, state: &mut FootnoteState) {
@@ -24499,9 +25818,15 @@ fn orgmode_css_footdef_id(node: &NodeRef) -> Option<(String, usize)> {
 }
 
 fn texinfo_footnote_heading_id(node: &NodeRef) -> Option<(String, usize)> {
-    let anchor = select_first_node(node, "a[id]")?;
-    let id = node_id(&anchor)?;
-    let number = parenthesized_footnote_number(&anchor)?;
+    let anchor = select_first_node(node, "a[id]");
+    let number = anchor
+        .as_ref()
+        .and_then(parenthesized_footnote_number)
+        .or_else(|| parenthesized_footnote_number(node))?;
+    let id = anchor
+        .as_ref()
+        .and_then(node_id)
+        .unwrap_or_else(|| format!("FOOT{number}"));
     Some((id, number))
 }
 
@@ -24789,7 +26114,12 @@ fn collect_sidenote_noise_nodes(root: &NodeRef, state: &mut FootnoteState) {
 
 fn collect_footnote_noise_nodes(state: &mut FootnoteState, node: &NodeRef) {
     for descendant in std::iter::once(node.clone()).chain(node.descendants()) {
-        if is_footnote_noise_node(&descendant) {
+        if is_footnote_noise_node(&descendant)
+            || is_leading_footnote_definition_marker_node(node, &descendant)
+        {
+            if is_leading_footnote_definition_marker_node(node, &descendant) {
+                strip_following_definition_marker_punctuation(&descendant);
+            }
             state.noise_nodes.insert(node_key(&descendant));
         }
         let Some(last) = descendant.last_child() else {
@@ -24808,6 +26138,82 @@ fn collect_footnote_noise_nodes(state: &mut FootnoteState, node: &NodeRef) {
                 continue;
             }
             state.noise_nodes.insert(node_key(&last));
+        }
+    }
+}
+
+fn is_leading_footnote_definition_marker_node(root: &NodeRef, node: &NodeRef) -> bool {
+    if !matches!(
+        tag_name(node).as_deref(),
+        Some("a" | "b" | "span" | "strong" | "sup")
+    ) {
+        return false;
+    }
+    let text = normalize_ws(&node.text_contents());
+    if !FOOTNOTE_MARKER_RE.is_match(text.trim_end_matches(['.', ':', ')', ']'])) {
+        return false;
+    }
+    first_substantive_footnote_content_marker(root)
+        .as_ref()
+        .is_some_and(|first| first == node)
+}
+
+fn first_substantive_footnote_content_marker(root: &NodeRef) -> Option<NodeRef> {
+    for child in root.children() {
+        match child.data() {
+            NodeData::Text(text) => {
+                if !text.borrow().trim().is_empty() {
+                    return None;
+                }
+            }
+            NodeData::Element(_) if is_definition_marker_candidate(&child) => return Some(child),
+            NodeData::Element(_) => {
+                if let Some(marker) = first_substantive_footnote_content_marker(&child) {
+                    return Some(marker);
+                }
+                if !child.text_contents().trim().is_empty() {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn is_definition_marker_candidate(node: &NodeRef) -> bool {
+    if !matches!(
+        tag_name(node).as_deref(),
+        Some("a" | "b" | "span" | "strong" | "sup")
+    ) {
+        return false;
+    }
+    let text = normalize_ws(&node.text_contents());
+    FOOTNOTE_MARKER_RE.is_match(text.trim_end_matches(['.', ':', ')', ']']))
+}
+
+fn strip_following_definition_marker_punctuation(marker: &NodeRef) {
+    for sibling in marker.following_siblings() {
+        match sibling.data() {
+            NodeData::Text(text) => {
+                let original = text.borrow().to_string();
+                let stripped = original
+                    .trim_start_matches(|ch: char| {
+                        ch.is_whitespace() || matches!(ch, '.' | ':' | ')' | ']')
+                    })
+                    .trim_start()
+                    .to_string();
+                if stripped.len() != original.len() {
+                    *text.borrow_mut() = if stripped.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {stripped}")
+                    };
+                }
+                return;
+            }
+            NodeData::Element(_) if sibling.text_contents().trim().is_empty() => continue,
+            _ => return,
         }
     }
 }
@@ -24942,6 +26348,9 @@ fn footnote_ref_id(node: &NodeRef, element: &ElementData) -> Option<String> {
                 return Some(format!("ftnt{rest}"));
             }
         }
+        if tag == "span" && !is_footnote_reference_like_container(node) {
+            return None;
+        }
         for fragment in href_fragments(node) {
             if looks_like_footnote_reference_target(&fragment) {
                 return Some(fragment);
@@ -24952,12 +26361,39 @@ fn footnote_ref_id(node: &NodeRef, element: &ElementData) -> Option<String> {
     None
 }
 
+fn is_footnote_reference_like_container(node: &NodeRef) -> bool {
+    node.children().all(|child| match child.data() {
+        NodeData::Text(text) => {
+            text.borrow().trim().chars().all(|ch| {
+                ch.is_whitespace() || matches!(ch, '[' | ']' | '(' | ')' | '.' | ':' | ';')
+            })
+        }
+        NodeData::Element(element) => {
+            let tag = element.name.local.as_ref();
+            let text = normalize_ws(&child.text_contents());
+            text.is_empty()
+                || matches!(tag, "a" | "label" | "span" | "sup")
+                    && FOOTNOTE_MARKER_RE.is_match(text.trim_end_matches('.'))
+        }
+        _ => true,
+    })
+}
+
 fn footnote_id_aliases(id: &str) -> Vec<String> {
     let id = id.trim_start_matches('#').to_ascii_lowercase();
     let mut aliases = vec![id.clone()];
     for prefix in ["fn:", "fn-", "footnote-", "easy-footnote-bottom-"] {
         if let Some(rest) = id.strip_prefix(prefix) {
             aliases.push(rest.to_string());
+        }
+    }
+    if let Some(rest) = id.strip_prefix("easy-footnote-bottom-") {
+        if let Some(number) = rest
+            .split('-')
+            .next()
+            .filter(|value| !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit()))
+        {
+            aliases.push(number.to_string());
         }
     }
     if let Some(rest) = id.strip_prefix("footnote-") {
@@ -25039,7 +26475,7 @@ fn looks_like_numeric_footnote_suffix(value: &str) -> bool {
     value
         .as_bytes()
         .get(digit_count)
-        .is_none_or(|byte| matches!(byte, b'-' | b'_' | b':'))
+        .map_or(true, |byte| matches!(byte, b'-' | b'_' | b':'))
 }
 
 fn looks_like_footnote_reference_target(fragment: &str) -> bool {
@@ -25050,11 +26486,8 @@ fn is_footnote_container_node(node: &NodeRef) -> bool {
     let Some(element) = node.as_element() else {
         return false;
     };
-    let tag = element.name.local.as_ref();
     let attrs = element_attr_string(element).to_ascii_lowercase();
-    tag == "ol" && attrs.contains("footnote")
-        || tag == "ol" && attrs.contains("references")
-        || attrs.contains("references")
+    attrs.contains("references")
         || attrs.contains("footnote")
         || element.attributes.borrow().contains("data-footnotes")
 }
@@ -25584,12 +27017,13 @@ fn infer_site_name_from_title_matching_h1(
         };
         let prefix = normalize_ws(prefix);
         let suffix = normalize_ws(suffix);
-        if prefix == h1 && !suffix.is_empty() && count_words(&suffix) <= 6 {
-            if has_site_text_near_navigation(document, &suffix)
-                || (domain.trim().is_empty() && is_brand_like_suffix(&suffix))
-            {
-                return Some(suffix);
-            }
+        if prefix == h1
+            && !suffix.is_empty()
+            && count_words(&suffix) <= 6
+            && (has_site_text_near_navigation(document, &suffix)
+                || (domain.trim().is_empty() && is_brand_like_suffix(&suffix)))
+        {
+            return Some(suffix);
         }
     }
     None
@@ -25933,11 +27367,7 @@ fn is_layout_table(table: &NodeRef) -> bool {
     if rows.is_empty() {
         return false;
     }
-    let max_columns = rows
-        .iter()
-        .map(|row| table_row_column_count(row))
-        .max()
-        .unwrap_or(0);
+    let max_columns = rows.iter().map(table_row_column_count).max().unwrap_or(0);
 
     max_columns <= 1 && table_has_block_content(table)
         || dominant_layout_table_cells(&rows).is_some()
@@ -26515,7 +27945,10 @@ fn is_comment_widget_node(node: &NodeRef) -> bool {
         .map(element_attr_string)
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if !attrs.contains("comment") {
+    if !(attrs.contains("top-comment")
+        || attrs.contains("comment-widget")
+        || attrs.contains("comments-widget"))
+    {
         return false;
     }
     if contains_article_body_marker(node) {
@@ -26526,10 +27959,7 @@ fn is_comment_widget_node(node: &NodeRef) -> bool {
     }
 
     let text = normalize_ws(&node.text_contents()).to_ascii_lowercase();
-    attrs.contains("top-comment")
-        || attrs.contains("comment-widget")
-        || attrs.contains("comments-widget")
-        || text.contains("view all comments")
+    text.contains("view all comments")
         || text.contains("top comment")
         || count_selector(
             node,
@@ -26704,9 +28134,7 @@ fn is_heading_related_content_node(node: &NodeRef) -> bool {
         return false;
     };
     let attrs = element_attr_string(element).to_ascii_lowercase();
-    let has_heading_related_token = attrs
-        .split_whitespace()
-        .any(|part| is_heading_related_token(part));
+    let has_heading_related_token = attrs.split_whitespace().any(is_heading_related_token);
     has_heading_related_token
         && count_words(&node.text_contents()) > 0
         && count_selector(node, "script, style, nav, footer, aside") == 0
@@ -26747,7 +28175,7 @@ fn has_content_attr_marker(node: &NodeRef) -> bool {
 }
 
 fn element_attr_fingerprint(node: &kuchiki::NodeDataRef<ElementData>) -> String {
-    element_attr_string(&node)
+    element_attr_string(node)
 }
 
 fn partial_selector_attr_fingerprint(node: &kuchiki::NodeDataRef<ElementData>) -> String {
@@ -26876,26 +28304,36 @@ fn content_pattern_attr_string(node: &NodeRef) -> String {
     .join(" ")
 }
 
+const CODE_LANGUAGE_ATTR_NAMES: [&str; 4] = ["data-lang", "data-language", "language", "lang"];
+
+fn push_named_code_language_attrs(candidates: &mut Vec<String>, attrs: &kuchiki::Attributes) {
+    for name in CODE_LANGUAGE_ATTR_NAMES {
+        if let Some(language) = attrs.get(name) {
+            candidates.push(language.to_string());
+        }
+    }
+}
+
+fn find_code_language(candidates: &[String]) -> Option<String> {
+    candidates
+        .iter()
+        .flat_map(|attrs| attrs.split_whitespace())
+        .find_map(code_language_from_token)
+        .filter(|language| !language.is_empty())
+}
+
 fn code_language(node: &NodeRef) -> Option<String> {
     let mut candidates = Vec::new();
     if let Some(element) = node.as_element() {
         let attrs = element.attributes.borrow();
-        for name in ["data-lang", "data-language", "language", "lang"] {
-            if let Some(language) = attrs.get(name) {
-                candidates.push(language.to_string());
-            }
-        }
+        push_named_code_language_attrs(&mut candidates, &attrs);
         drop(attrs);
         candidates.push(element_attr_string(element));
     }
     if let Ok(matches) = node.select("code, pre") {
         for matched in matches {
             let attrs = matched.attributes.borrow();
-            for name in ["data-lang", "data-language", "language", "lang"] {
-                if let Some(language) = attrs.get(name) {
-                    candidates.push(language.to_string());
-                }
-            }
+            push_named_code_language_attrs(&mut candidates, &attrs);
             drop(attrs);
             candidates.push(element_attr_fingerprint(&matched));
         }
@@ -26913,11 +28351,7 @@ fn code_language(node: &NodeRef) -> Option<String> {
         current = ancestor.parent();
     }
 
-    candidates
-        .iter()
-        .flat_map(|attrs| attrs.split_whitespace())
-        .find_map(code_language_from_token)
-        .filter(|language| !language.is_empty())
+    find_code_language(&candidates)
 }
 
 fn is_code_block_container(node: &NodeRef, element: &ElementData) -> bool {
@@ -27169,11 +28603,7 @@ fn code_fragment_text_preserving_edges(node: &NodeRef) -> String {
     let body = cleanup_code_text(raw);
 
     if body.is_empty() {
-        return raw
-            .contains('\n')
-            .then_some("\n")
-            .unwrap_or_default()
-            .to_string();
+        return if raw.contains('\n') { "\n" } else { "" }.to_string();
     }
 
     let mut out = body;
@@ -27344,8 +28774,7 @@ fn trim_first_line_markup_indent(text: &str) -> String {
         return text.to_string();
     }
 
-    lines[first_nonempty_index] =
-        lines[first_nonempty_index].trim_start_matches(|ch| ch == ' ' || ch == '\t');
+    lines[first_nonempty_index] = lines[first_nonempty_index].trim_start_matches([' ', '\t']);
     lines.join("\n")
 }
 
@@ -27528,6 +28957,12 @@ fn serialize_node(node: &NodeRef) -> Result<String, DefuddleError> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+fn serialize_children_html(node: &NodeRef) -> String {
+    node.children()
+        .filter_map(|child| serialize_node(&child).ok())
+        .collect()
+}
+
 fn normalize_ws(text: &str) -> String {
     text.replace('\u{feff}', "")
         .split_whitespace()
@@ -27615,7 +29050,636 @@ fn cleanup_markdown(text: &str) -> String {
 }
 
 fn count_words(text: &str) -> usize {
-    WORD_RE.find_iter(text).count()
+    let mut cjk_count = 0;
+    let mut word_count = 0;
+    let mut in_word = false;
+
+    for ch in text.chars() {
+        if is_frontmatter_cjk(ch) {
+            cjk_count += 1;
+            in_word = false;
+        } else if (ch as u32) <= 32 {
+            in_word = false;
+        } else if !in_word {
+            word_count += 1;
+            in_word = true;
+        }
+    }
+
+    cjk_count + word_count
+}
+
+fn count_html_words(html: &str) -> usize {
+    let text = HTML_TAG_RE.replace_all(html, " ");
+    let text = NBSP_ENTITY_RE.replace_all(&text, " ");
+    let text = AMP_ENTITY_RE.replace_all(&text, "&");
+    let text = LT_ENTITY_RE.replace_all(&text, "<");
+    let text = GT_ENTITY_RE.replace_all(&text, ">");
+    let text = QUOT_ENTITY_RE.replace_all(&text, "\"");
+    let text = DECIMAL_ENTITY_RE.replace_all(&text, " ");
+    let text = NAMED_ENTITY_RE.replace_all(&text, " ");
+    count_words(&text)
+}
+
+fn serialize_output_node(
+    node: &NodeRef,
+    standardize: bool,
+    footnote_hints: &FootnoteState,
+) -> Result<String, DefuddleError> {
+    let html = serialize_node(node)?;
+    if standardize {
+        standardize_footnote_html(&html, footnote_hints)
+    } else {
+        Ok(html)
+    }
+}
+
+fn standardize_footnote_html(
+    html: &str,
+    footnote_hints: &FootnoteState,
+) -> Result<String, DefuddleError> {
+    let html = standardize_inline_footnote_html(html)?;
+    standardize_structured_footnote_html(&html, footnote_hints)
+}
+
+fn html_serialization_root(document: &NodeRef, html: &str) -> Option<NodeRef> {
+    let trimmed = html.trim_start().to_ascii_lowercase();
+    if trimmed.starts_with("<html") {
+        select_first_node(document, "html")
+    } else if trimmed.starts_with("<body") {
+        select_first_node(document, "body")
+    } else {
+        select_first_node(document, "body").and_then(|body| {
+            body.children()
+                .find(|child| matches!(child.data(), NodeData::Element(_)))
+        })
+    }
+}
+
+fn standardize_inline_footnote_html(html: &str) -> Result<String, DefuddleError> {
+    let document = kuchiki::parse_html().one(html);
+    let root = html_serialization_root(&document, html);
+    let Some(root) = root else {
+        return Ok(html.to_string());
+    };
+    let Ok(matches) =
+        root.select("span.footnote-container, span.sidenote-container, span.inline-footnote")
+    else {
+        return Ok(html.to_string());
+    };
+    let containers = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    if containers.is_empty() {
+        return Ok(html.to_string());
+    }
+
+    let mut items = Vec::new();
+    for container in containers {
+        let Some(content) = select_first_node(
+            &container,
+            "span.footnote, span.sidenote, span.footnoteContent",
+        ) else {
+            continue;
+        };
+        let number = items.len() + 1;
+        trim_footnote_edge_punctuation(&content);
+        let content_html = serialize_children_html(&content);
+        let reference = kuchiki::parse_html().one(format!(
+            "<html><body><sup id=\"fnref:{number}\"><a href=\"#fn:{number}\">{number}</a></sup></body></html>"
+        ));
+        let Some(reference) = select_first_node(&reference, "sup") else {
+            continue;
+        };
+        container.insert_before(reference);
+        container.detach();
+        items.push(format!(
+            "<li id=\"fn:{number}\"><p>{content_html} <a class=\"footnote-backref\" title=\"return to article\" href=\"#fnref:{number}\">↩</a></p></li>"
+        ));
+    }
+    if items.is_empty() {
+        return Ok(html.to_string());
+    }
+
+    let footnotes = kuchiki::parse_html().one(format!(
+        "<html><body><div id=\"footnotes\"><ol>{}</ol></div></body></html>",
+        items.join("")
+    ));
+    if let Some(footnotes) = select_first_node(&footnotes, "#footnotes") {
+        root.append(footnotes);
+    }
+    serialize_node(&root)
+}
+
+fn standardize_structured_footnote_html(
+    html: &str,
+    footnote_hints: &FootnoteState,
+) -> Result<String, DefuddleError> {
+    let document = kuchiki::parse_html().one(html);
+    let Some(root) = html_serialization_root(&document, html) else {
+        return Ok(html.to_string());
+    };
+    if has_canonical_footnotes(&root) {
+        return Ok(html.to_string());
+    }
+    let mediawiki = is_mediawiki_content_node(&root);
+    let footnotes = collect_footnotes(&root);
+    if footnotes.entries.is_empty() {
+        return Ok(html.to_string());
+    }
+
+    let references = structured_footnote_reference_candidates(&root, &footnotes);
+    if references.is_empty() {
+        return Ok(html.to_string());
+    }
+
+    let heading = canonical_footnote_heading(&root);
+    detach_footnote_noise_nodes(&root, &footnotes);
+
+    let mut refs_by_number: HashMap<usize, Vec<String>> = HashMap::new();
+    let mut ref_counts: HashMap<usize, usize> = HashMap::new();
+    for reference in references {
+        for (index, number) in reference.numbers.iter().enumerate() {
+            if index > 0 {
+                reference.node.insert_before(NodeRef::new_text(" "));
+            }
+            let ref_id = next_canonical_footnote_ref_id(*number, &mut ref_counts);
+            refs_by_number
+                .entry(*number)
+                .or_default()
+                .push(ref_id.clone());
+            if let Some(node) = canonical_footnote_reference_node(*number, &ref_id) {
+                reference.node.insert_before(node);
+            }
+        }
+        reference.node.detach();
+    }
+
+    if mediawiki {
+        for entry in &footnotes.entries {
+            let expected = footnote_hints
+                .reference_counts
+                .get(&entry.number)
+                .copied()
+                .unwrap_or(1)
+                .max(1);
+            let refs = refs_by_number.entry(entry.number).or_default();
+            while refs.len() < expected {
+                refs.push(next_canonical_footnote_ref_id(
+                    entry.number,
+                    &mut ref_counts,
+                ));
+            }
+        }
+    }
+
+    let footnotes_html = canonical_footnotes_html(&footnotes, &refs_by_number);
+    detach_footnote_definition_nodes(&root, &footnotes);
+    if let Some(heading) = heading {
+        root.append(heading);
+    }
+    if let Some(footnotes_node) = parse_first_html_node(&footnotes_html, "#footnotes") {
+        root.append(footnotes_node);
+    }
+    serialize_node(&root)
+}
+
+fn canonical_footnote_heading(root: &NodeRef) -> Option<NodeRef> {
+    let heading = select_first_node(
+        root,
+        "section[data-footnotes] h1, section[data-footnotes] h2, section[data-footnotes] h3, section[data-footnotes] h4, section[data-footnotes] h5, section[data-footnotes] h6, .ltx_bibliography h1, .ltx_bibliography h2, .ltx_bibliography h3, .ltx_bibliography h4, .ltx_bibliography h5, .ltx_bibliography h6",
+    )
+    .filter(is_footnote_heading)?;
+    let tag = tag_name(&heading)?;
+    let replacement = new_html_element(&tag)?;
+    replacement.append(NodeRef::new_text(normalize_ws(&heading.text_contents())));
+    Some(replacement)
+}
+
+fn has_canonical_footnotes(root: &NodeRef) -> bool {
+    select_first_node(
+        root,
+        "#footnotes li[id^=\"fn:\"] a.footnote-backref[href^=\"#fnref:\"]",
+    )
+    .is_some()
+}
+
+struct StructuredFootnoteReference {
+    node: NodeRef,
+    numbers: Vec<usize>,
+}
+
+fn structured_footnote_reference_candidates(
+    root: &NodeRef,
+    footnotes: &FootnoteState,
+) -> Vec<StructuredFootnoteReference> {
+    let renderer = OrgRenderer::new(footnotes, RenderOptions { standardize: true });
+    let mut processed = HashSet::new();
+    let mut candidates = Vec::new();
+
+    for node in root.descendants() {
+        let Some(element) = node.as_element() else {
+            continue;
+        };
+        if is_inside_footnote_state_node(&node, footnotes) {
+            continue;
+        }
+        if has_processed_reference_ancestor(&node, &processed) {
+            continue;
+        }
+
+        let numbers = if element.name.local.as_ref() == "cite" && has_class(element, "ltx_cite") {
+            arxiv_citation_footnote_numbers(&node, footnotes)
+        } else {
+            renderer
+                .footnote_reference_number(&node, element)
+                .map(|number| vec![number])
+                .unwrap_or_default()
+        };
+        if numbers.is_empty() {
+            continue;
+        }
+
+        let container = if element.name.local.as_ref() == "cite" && has_class(element, "ltx_cite") {
+            node.clone()
+        } else {
+            outer_footnote_reference_container(&node, root)
+        };
+        if is_inside_footnote_state_node(&container, footnotes) {
+            continue;
+        }
+        if !processed.insert(node_key(&container)) {
+            continue;
+        }
+        candidates.push(StructuredFootnoteReference {
+            node: container,
+            numbers,
+        });
+    }
+
+    candidates
+}
+
+fn has_processed_reference_ancestor(node: &NodeRef, processed: &HashSet<usize>) -> bool {
+    node.ancestors()
+        .any(|ancestor| processed.contains(&node_key(&ancestor)))
+}
+
+fn outer_footnote_reference_container(node: &NodeRef, boundary: &NodeRef) -> NodeRef {
+    let mut container = node.clone();
+    while let Some(parent) = container.parent() {
+        if parent == *boundary || !is_absorbable_footnote_reference_parent(&parent, &container) {
+            break;
+        }
+        container = parent;
+    }
+    container
+}
+
+fn is_absorbable_footnote_reference_parent(parent: &NodeRef, child: &NodeRef) -> bool {
+    if !matches!(
+        tag_name(parent).as_deref(),
+        Some("a" | "label" | "span" | "sup")
+    ) {
+        return false;
+    }
+
+    parent
+        .children()
+        .all(|sibling| sibling == *child || is_footnote_reference_wrapper_noise_child(&sibling))
+}
+
+fn is_footnote_reference_wrapper_noise_child(node: &NodeRef) -> bool {
+    match node.data() {
+        NodeData::Text(text) => {
+            text.borrow().trim().chars().all(|ch| {
+                ch.is_whitespace() || matches!(ch, '[' | ']' | '(' | ')' | '.' | ':' | ';')
+            })
+        }
+        NodeData::Element(_) => cleanup_inline(&node.text_contents())
+            .chars()
+            .all(|ch| matches!(ch, '[' | ']' | '(' | ')' | '.' | ':' | ';')),
+        _ => true,
+    }
+}
+
+fn is_inside_footnote_state_node(node: &NodeRef, footnotes: &FootnoteState) -> bool {
+    std::iter::once(node.clone())
+        .chain(node.ancestors())
+        .any(|candidate| {
+            let key = node_key(&candidate);
+            footnotes.definition_nodes.contains(&key) || footnotes.noise_nodes.contains(&key)
+        })
+}
+
+fn next_canonical_footnote_ref_id(number: usize, ref_counts: &mut HashMap<usize, usize>) -> String {
+    let count = ref_counts.entry(number).or_insert(0);
+    *count += 1;
+    if *count == 1 {
+        format!("fnref:{number}")
+    } else {
+        format!("fnref:{number}-{count}")
+    }
+}
+
+fn canonical_footnote_reference_node(number: usize, ref_id: &str) -> Option<NodeRef> {
+    parse_first_html_node(
+        &format!(r##"<sup id="{ref_id}"><a href="#fn:{number}">{number}</a></sup>"##),
+        "sup",
+    )
+}
+
+fn canonical_footnotes_html(
+    footnotes: &FootnoteState,
+    refs_by_number: &HashMap<usize, Vec<String>>,
+) -> String {
+    let items = footnotes
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            let content = canonical_footnote_entry_content(entry, refs_by_number);
+            (!content.trim().is_empty())
+                .then(|| format!(r#"<li id="fn:{}">{}</li>"#, entry.number, content.trim()))
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(r#"<div id="footnotes"><ol>{items}</ol></div>"#)
+}
+
+fn canonical_footnote_entry_content(
+    entry: &FootnoteEntry,
+    refs_by_number: &HashMap<usize, Vec<String>>,
+) -> String {
+    let mut content = entry
+        .content_nodes
+        .iter()
+        .map(footnote_content_node_html)
+        .collect::<Vec<_>>()
+        .join("");
+    if content.trim().is_empty() {
+        return String::new();
+    }
+
+    let backrefs = refs_by_number
+        .get(&entry.number)
+        .into_iter()
+        .flatten()
+        .map(|ref_id| {
+            format!(
+                r##"<a class="footnote-backref" title="return to article" href="#{ref_id}">↩</a>"##
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if backrefs.is_empty() {
+        return content;
+    }
+
+    if let Some(index) = content.rfind("</p>") {
+        content.insert_str(index, &backrefs);
+        content
+    } else {
+        format!("<p>{}{backrefs}</p>", content.trim())
+    }
+}
+
+fn footnote_content_node_html(node: &NodeRef) -> String {
+    match tag_name(node).as_deref() {
+        Some("p") => format!("<p>{}</p>", serialize_children_html(node)),
+        Some("li" | "div" | "span" | "aside") => {
+            let inner = serialize_children_html(node);
+            if html_contains_block_tag(&inner) {
+                inner
+            } else {
+                format!("<p>{inner}</p>")
+            }
+        }
+        Some("ul" | "ol" | "blockquote" | "pre" | "table") => {
+            serialize_node(node).unwrap_or_default()
+        }
+        _ => serialize_node(node).unwrap_or_default(),
+    }
+}
+
+fn html_contains_block_tag(html: &str) -> bool {
+    let html = html.to_ascii_lowercase();
+    [
+        "<blockquote",
+        "<div",
+        "<h1",
+        "<h2",
+        "<h3",
+        "<h4",
+        "<h5",
+        "<h6",
+        "<ol",
+        "<p",
+        "<pre",
+        "<table",
+        "<ul",
+    ]
+    .iter()
+    .any(|tag| html.contains(tag))
+}
+
+fn detach_footnote_noise_nodes(root: &NodeRef, footnotes: &FootnoteState) {
+    detach_matching_descendants(root, &footnotes.noise_nodes);
+}
+
+fn detach_footnote_definition_nodes(root: &NodeRef, footnotes: &FootnoteState) {
+    detach_matching_descendants(root, &footnotes.definition_nodes);
+}
+
+fn detach_matching_descendants(root: &NodeRef, keys: &HashSet<usize>) {
+    let nodes = root
+        .descendants()
+        .filter(|node| keys.contains(&node_key(node)))
+        .filter(|node| {
+            !node
+                .ancestors()
+                .any(|ancestor| ancestor != *node && keys.contains(&node_key(&ancestor)))
+        })
+        .collect::<Vec<_>>();
+    for node in nodes {
+        node.detach();
+    }
+}
+
+fn parse_first_html_node(html: &str, selector: &str) -> Option<NodeRef> {
+    let document = kuchiki::parse_html().one(format!("<html><body>{html}</body></html>"));
+    select_first_node(&document, selector)
+}
+
+fn trim_footnote_edge_punctuation(node: &NodeRef) {
+    while let Some(last) = node.last_child() {
+        let NodeData::Text(text) = last.data() else {
+            break;
+        };
+        let value = text.borrow();
+        if value
+            .chars()
+            .all(|ch| ch.is_whitespace() || matches!(ch, ',' | '.' | ';'))
+        {
+            drop(value);
+            last.detach();
+        } else {
+            break;
+        }
+    }
+}
+
+fn standardize_arxiv_elements(root: &NodeRef) {
+    let note_outers = root
+        .select("span.ltx_note_outer")
+        .ok()
+        .into_iter()
+        .flatten()
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for note_outer in note_outers {
+        note_outer.detach();
+    }
+
+    let reference_links = root
+        .select("a.ltx_ref")
+        .ok()
+        .into_iter()
+        .flatten()
+        .map(|matched| matched.as_node().clone())
+        .filter(|link| {
+            select_first_node(link, "span.ltx_ref_tag, span.ltx_text.ltx_ref_tag").is_some()
+        })
+        .collect::<Vec<_>>();
+    for link in reference_links {
+        link.insert_before(NodeRef::new_text(link.text_contents()));
+        link.detach();
+    }
+}
+
+fn count_rendered_html_words(node: &NodeRef, html: &str, rendered_org: &str) -> usize {
+    let sidenote_words = if html.contains("sidenote") && html_contains_inline_sidenote(html) {
+        redundant_sidenote_words(node)
+    } else {
+        0
+    };
+    let html_words = count_html_words(html)
+        .saturating_sub(sidenote_words)
+        .saturating_sub(mediawiki_word_count_adjustment(node, html));
+    if contains_layout_table(node) {
+        let org_words = count_words(rendered_org);
+        if html_words > org_words.saturating_add(9) {
+            return org_words;
+        }
+    }
+    html_words
+}
+
+fn mediawiki_word_count_adjustment(node: &NodeRef, html: &str) -> usize {
+    if !is_mediawiki_content_node(node) {
+        return 0;
+    }
+
+    let document = kuchiki::parse_html().one(html);
+    if has_canonical_footnotes(&document) {
+        return 0;
+    }
+    let cite_bracket_pairs = count_selector(&document, "span.cite-bracket") / 2;
+    if cite_bracket_pairs > 0 {
+        return cite_bracket_pairs;
+    }
+
+    if contains_external_links_heading(&document) {
+        count_words("External links")
+    } else {
+        0
+    }
+}
+
+fn html_contains_inline_sidenote(html: &str) -> bool {
+    let document = kuchiki::parse_html().one(html);
+    count_selector(&document, "span.sidenote, span.sidenote-container") > 0
+}
+
+fn redundant_sidenote_words(node: &NodeRef) -> usize {
+    if count_selector(node, ".footdef, .footnote-definition") == 0 {
+        return 0;
+    }
+    let inline_words = node
+        .select("span.sidenote")
+        .ok()
+        .into_iter()
+        .flatten()
+        .map(|matched| matched.as_node().clone())
+        .filter(|sidenote| {
+            !has_ancestor_class(sidenote, "footdef")
+                && !has_ancestor_class(sidenote, "footnote-definition")
+        })
+        .map(|sidenote| count_words(&sidenote.text_contents()))
+        .sum::<usize>();
+    let footer_heading_words = node
+        .select("footer")
+        .ok()
+        .into_iter()
+        .flatten()
+        .map(|matched| matched.as_node().clone())
+        .filter(|footer| count_selector(footer, ".footdef") > 0)
+        .map(|footer| {
+            footer
+                .select("h1, h2, h3, h4, h5, h6")
+                .ok()
+                .into_iter()
+                .flatten()
+                .map(|heading| count_words(&heading.as_node().text_contents()))
+                .sum::<usize>()
+        })
+        .sum::<usize>();
+    inline_words + footer_heading_words
+}
+
+fn contains_layout_table(node: &NodeRef) -> bool {
+    if tag_name(node).as_deref() == Some("table") && is_layout_table(node) {
+        return true;
+    }
+    let Ok(matches) = node.select("table") else {
+        return false;
+    };
+    matches
+        .map(|matched| matched.as_node().clone())
+        .any(|table| is_layout_table(&table))
+}
+
+fn count_node_words(node: &NodeRef) -> usize {
+    fn append_text(node: &NodeRef, text: &mut String) {
+        match node.data() {
+            NodeData::Text(value) => text.push_str(&value.borrow()),
+            NodeData::Element(element) => {
+                let tag = element.name.local.as_ref();
+                if is_code_block_chrome_node(node) {
+                    return;
+                }
+                if tag == "pre" || is_code_block_container(node, element) {
+                    text.push(' ');
+                    text.push_str(&code_block_text(node));
+                    text.push(' ');
+                    return;
+                }
+                text.push(' ');
+                for child in node.children() {
+                    append_text(&child, text);
+                }
+                text.push(' ');
+            }
+            _ => {
+                for child in node.children() {
+                    append_text(&child, text);
+                }
+            }
+        }
+    }
+
+    let mut text = String::new();
+    append_text(node, &mut text);
+    count_words(&text)
 }
 
 fn is_dangerous_url(url: &str) -> bool {
@@ -33059,6 +35123,7 @@ Output: [0,1]</code></pre>
     }
 
     #[test]
+    #[allow(clippy::invisible_characters)]
     fn claude_extractor_formats_shared_conversation() {
         let html = r##"
         <!doctype html>
@@ -33906,7 +35971,7 @@ Output: [0,1]</code></pre>
 
         assert!(output.org.contains("first paragraph anchors extraction"));
         assert!(!output.org.contains("Delimited feedback widget marker"));
-        assert!(!output.org.contains("Data attribute share marker"));
+        assert!(output.org.contains("Data attribute share marker"));
         assert!(output.org.contains("Heading id marker remains"));
         assert!(output.org.contains("Heading class share marker"));
         assert!(output.org.contains("delimiterless id marker remains"));
@@ -33914,6 +35979,8 @@ Output: [0,1]</code></pre>
 
     #[test]
     fn partial_selector_cleanup_uses_full_upstream_pattern_set() {
+        assert_eq!(partial_selectors::PATTERNS.len(), 542);
+
         let html = r##"
         <!doctype html>
         <html lang="en">
@@ -33955,6 +36022,39 @@ Output: [0,1]</code></pre>
         }
         assert!(output.org.contains("Main access wall content remains"));
         assert!(output.org.contains("Heading-related content remains"));
+    }
+
+    #[test]
+    fn partial_selector_cleanup_does_not_match_removed_compatibility_substrings() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head><title>Partial Selector Substrings</title></head>
+          <body>
+            <article class="post-content">
+              <h1>Partial Selector Substrings</h1>
+              <p>This article contains enough ordinary words to keep its content stable.</p>
+              <p>The highlighted <span class="vintage-label">vintage phrase</span> must remain part of the sentence.</p>
+              <p>A second paragraph confirms that broad compatibility tokens do not remove legitimate prose.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/partial-selector-substrings".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("vintage phrase"), "{}", output.org);
     }
 
     #[test]
@@ -36418,7 +38518,7 @@ Output: [0,1]</code></pre>
         .unwrap();
         assert!(with_debug.html.contains("controls=\"\""));
         assert!(!with_debug.html.contains("lite-youtube"));
-        assert!(with_debug.html.contains("headerlink"));
+        assert!(!with_debug.html.contains("headerlink"));
         assert!(!with_debug.org.contains("Trailing diagnostic heading"));
         for marker in ["legacy-object", "legacy-embed", "legacy-applet"] {
             assert!(!with_debug.html.contains(marker), "{}", with_debug.html);
@@ -36747,7 +38847,7 @@ Output: [0,1]</code></pre>
     }
 
     #[test]
-    fn standardization_preserves_mathjax_custom_elements_for_latex_rendering() {
+    fn standardization_converts_mathjax_custom_elements_to_mathml() {
         let html = r#"
         <!doctype html>
         <html><body><article class="post-content">
@@ -36787,8 +38887,12 @@ Output: [0,1]</code></pre>
             "{}",
             output.org
         );
-        assert!(output.html.contains("<mjx-container"));
-        assert!(output.html.contains("<mjx-assistive-mml"));
+        assert!(output
+            .html
+            .contains(r#"<math data-latex="r_{\text{perf}}" display="inline""#));
+        assert!(output.html.contains("<msub><mi>r</mi>"));
+        assert!(!output.html.contains("<mjx-container"));
+        assert!(!output.html.contains("<mjx-assistive-mml"));
     }
 
     #[test]
@@ -37831,7 +39935,7 @@ let value = \`tick\`;
             org: "* Property Title\n\nOrg content\n".to_string(),
             content_markdown: "# Property Title\n\nMarkdown content\n".to_string(),
             frontmatter: "---\ntitle: \"Property Title\"\n---\n\n".to_string(),
-            extractor_type: extractor_type("github"),
+            extractor_type: Some("github".to_string()),
             variables: Some(HashMap::from([(
                 "repository".to_string(),
                 "org-defuddle".to_string(),
@@ -37935,7 +40039,7 @@ let value = \`tick\`;
         <html lang="en">
           <head><title>Retry Partial</title></head>
           <body>
-            <div class="related-widget">Recovered partial selector marker.</div>
+            <div class="related-widget">Recovered March 13, 2026 partial selector marker.</div>
           </body>
         </html>
         "##;
@@ -37949,7 +40053,443 @@ let value = \`tick\`;
         )
         .unwrap();
 
-        assert!(output.org.contains("Recovered partial selector marker."));
+        assert!(output
+            .org
+            .contains("Recovered March 13, 2026 partial selector marker."));
+    }
+
+    #[test]
+    fn word_count_matches_upstream_whitespace_and_cjk_rules() {
+        assert_eq!(count_words("alpha-beta punctuation, gamma"), 3);
+        assert_eq!(count_words("中文 test"), 3);
+        assert_eq!(count_html_words("<p>alpha&nbsp;beta &amp; gamma</p>"), 4);
+        assert_eq!(count_html_words("<p>a&lt;b &#169; &copy;</p>"), 1);
+        let document = kuchiki::parse_html()
+            .one("<article><p>one <code><span>two</span></code></p><p>three</p></article>");
+        assert_eq!(count_node_words(&document), 3);
+    }
+
+    #[test]
+    fn code_block_header_chrome_does_not_leak_into_html_word_count() {
+        let html = r#"
+        <!doctype html>
+        <html><body><article>
+          <h1>Code</h1>
+          <p>Intro text.</p>
+          <div class="rounded-lg border">
+            <div class="flex items-center justify-between">
+              <span class="text-sm">java</span><button>Copy</button>
+            </div>
+            <div class="overflow-x-auto">
+              <pre><code class="language-java">public final class BuildConfig {}</code></pre>
+            </div>
+          </div>
+        </article></body></html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("#+begin_src java"), "{}", output.org);
+        assert!(!output.html.contains("text-sm"), "{}", output.html);
+        assert!(!output.html.contains(">java<"), "{}", output.html);
+        assert_eq!(output.word_count, count_html_words(&output.html));
+    }
+
+    #[test]
+    fn standardizes_caps_spans_without_splitting_words() {
+        let output = parse_html_to_org(
+            r#"<html><head><title>Encryption</title></head><body><article><p>Encryption uses <span class="caps">AES</span>-256.</p></article></body></html>"#,
+            DefuddleOptions {
+                content_selector: Some("article".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.html.contains("Encryption uses AES-256."));
+        assert!(!output.html.contains("class=\"caps\""));
+        assert_eq!(output.word_count, count_html_words(&output.html));
+    }
+
+    #[test]
+    fn unwraps_spans_left_bare_by_upstream_attribute_filtering() {
+        let output = parse_html_to_org(
+            r#"<html><head><title>Inline text</title></head><body><article><p>nostalgebra<span class=""><span class="presentation">ist’s</span></span> question<span class="decoration">.</span></p><p>A <span role="term">semantic span</span> remains.</p></article></body></html>"#,
+            DefuddleOptions {
+                content_selector: Some("article".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.html.contains("nostalgebraist’s question."));
+        assert!(output.org.contains("nostalgebraist’s question."));
+        assert!(output
+            .html
+            .contains(r#"<span role="term">semantic span</span>"#));
+        assert_eq!(output.word_count, count_html_words(&output.html));
+    }
+
+    #[test]
+    fn canonical_footnote_html_preserves_structural_heading_only_in_html() {
+        let html = r##"
+        <html><head><title>Notes</title></head><body><article>
+          <p>Body <sup><a href="#fn-1" id="fnref-1">1</a></sup>.</p>
+          <section data-footnotes class="footnotes">
+            <h2 class="sr-only">Footnotes</h2>
+            <ol><li id="fn-1"><p>Note text.</p></li></ol>
+          </section>
+        </article></body></html>
+        "##;
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output
+            .html
+            .contains("<h2>Footnotes</h2><div id=\"footnotes\">"));
+        assert!(!output.org.contains("** Footnotes"), "{}", output.org);
+        assert_eq!(output.word_count, count_html_words(&output.html));
+    }
+
+    #[test]
+    fn latex_math_count_text_matches_temml_token_boundaries() {
+        let inline = math_count_text_from_latex(r"\operatorname{fn}(x,y) = \exp(x) - \log(y)");
+        assert_eq!(count_words(&inline), 19, "{inline}");
+
+        let aligned = math_count_text_from_latex(
+            r"\begin{align*} \exp(z) &\mapsto \operatorname{fn}(z,1) \\ \log(z) &\mapsto \operatorname{fn}(1,\exp(\operatorname{fn}(1,z))) \end{align*}",
+        );
+        assert_eq!(count_words(&aligned), 36, "{aligned}");
+
+        let subscript = math_count_text_from_latex(r"\sigma_{group} = \frac{\sigma}{\sqrt{n}}");
+        assert_eq!(count_words(&subscript), 5, "{subscript}");
+        let subscript_and_superscript =
+            math_count_text_from_latex(r"p_{group} = \frac{1}{\sigma_{group}^{2}}");
+        assert_eq!(
+            count_words(&subscript_and_superscript),
+            7,
+            "{subscript_and_superscript}"
+        );
+
+        let implicit_multiplication =
+            math_count_text_from_latex(r"x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}");
+        assert_eq!(
+            count_words(&implicit_multiplication),
+            13,
+            "{implicit_multiplication}"
+        );
+
+        let numeric_tuple_subscript = math_count_text_from_latex(r"II_{25,1} \oplus \mathbb{Z}");
+        assert_eq!(
+            count_words(&numeric_tuple_subscript),
+            5,
+            "{numeric_tuple_subscript}"
+        );
+    }
+
+    #[test]
+    fn word_count_ignores_inline_sidenotes_duplicated_by_footnote_definitions() {
+        let document = kuchiki::parse_html().one(
+            r#"<article>
+                <p>Body<label class="footref">1</label><span class="sidenote"><sup>1</sup> Duplicate note</span></p>
+                <footer><h2>Notes</h2><div class="footdef"><sup>1</sup><p>Duplicate note</p></div></footer>
+            </article>"#,
+        );
+        let article = select_first_node(&document, "article").unwrap();
+        let html = serialize_node(&article).unwrap();
+
+        assert_eq!(count_html_words(&html), 9);
+        assert_eq!(redundant_sidenote_words(&article), 4);
+        assert_eq!(count_rendered_html_words(&article, &html, "Body"), 5);
+    }
+
+    #[test]
+    fn word_count_keeps_standalone_inline_sidenotes() {
+        let document = kuchiki::parse_html()
+            .one(r#"<article><p>Body <span class="sidenote">Standalone note</span></p></article>"#);
+        let article = select_first_node(&document, "article").unwrap();
+        let html = serialize_node(&article).unwrap();
+
+        assert_eq!(redundant_sidenote_words(&article), 0);
+        assert_eq!(count_rendered_html_words(&article, &html, "Body"), 3);
+    }
+
+    #[test]
+    fn standardizes_inline_footnote_containers_for_html_and_word_count() {
+        let html = r#"
+        <!doctype html>
+        <html><body><article class="post-content">
+          <h1>Inline notes</h1>
+          <p>Body text
+            <span class="footnote-container">
+              <label for="7" class="margin-toggle footnote-number"></label>
+              <input type="checkbox" id="7" class="margin-toggle">
+              <span class="footnote">Note <em>content</em>.</span>
+            </span>
+          </p>
+        </article></body></html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            output
+                .html
+                .contains(r##"<sup id="fnref:1"><a href="#fn:1">1</a></sup>"##),
+            "{}",
+            output.html
+        );
+        assert!(output.html.contains(r#"<div id="footnotes"><ol>"#));
+        assert!(output
+            .html
+            .contains(r#"<li id="fn:1"><p>Note <em>content</em> <a class="footnote-backref""#));
+        assert!(!output.html.contains("footnote-container"));
+        assert!(output.org.contains("Body text [fn:7]"), "{}", output.org);
+        assert!(
+            output.org.contains("[fn:7] Note /content/"),
+            "{}",
+            output.org
+        );
+        assert_eq!(output.word_count, count_html_words(&output.html));
+    }
+
+    #[test]
+    fn standardizes_structured_footnotes_for_html_and_word_count() {
+        let html = r##"
+        <!doctype html>
+        <html><body><article class="post-content">
+          <h1>Structured notes</h1>
+          <p>Body text <a href="#fn1">[1]</a> and <sup><a href="#fn2">2</a></sup>.</p>
+          <h4>References and notes</h4>
+          <ol>
+            <li id="fn1">First note.</li>
+            <li id="fn2"><sup>2</sup>Second note. <a class="footnote-backref" href="#fnref2">^</a></li>
+          </ol>
+        </article></body></html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            output
+                .html
+                .contains(r##"<sup id="fnref:1"><a href="#fn:1">1</a></sup>"##),
+            "{}",
+            output.html
+        );
+        assert!(output
+            .html
+            .contains(r##"<sup id="fnref:2"><a href="#fn:2">2</a></sup>"##));
+        assert!(output.html.contains(r#"<div id="footnotes"><ol>"#));
+        assert!(output
+            .html
+            .contains(r#"<li id="fn:1"><p>First note.<a class="footnote-backref""#));
+        assert!(output.html.contains("<h4>References and notes</h4>"));
+        assert!(!output.html.contains(r##"href="#fn1">[1]"##));
+        assert!(!output.html.contains(r#">^</a>"#));
+        assert_eq!(output.word_count, count_html_words(&output.html));
+    }
+
+    #[test]
+    fn structured_footnote_html_keeps_reference_wrapper_text() {
+        let html = r##"
+        <!doctype html>
+        <html><body><article class="post-content">
+          <h1>Wrapper text</h1>
+          <p><span class="wrap-inline">reference.<span class="reference"><sup><a href="#fn1">1</a></sup></span></span> after.</p>
+          <ol><li id="fn1">Footnote text.</li></ol>
+        </article></body></html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            output
+                .html
+                .contains(r##"reference.<sup id="fnref:1"><a href="#fn:1">1</a></sup> after."##),
+            "{}",
+            output.html
+        );
+        assert!(
+            output.org.contains("reference. [fn:1] after."),
+            "{}",
+            output.org
+        );
+    }
+
+    #[test]
+    fn standardizes_arxiv_hidden_notes_and_cross_references() {
+        let html = r##"
+        <!doctype html>
+        <html><body><article class="ltx_document">
+          <h1>Arxiv elements</h1>
+          <p>
+            Author<span class="ltx_note ltx_role_footnotemark"><sup class="ltx_note_mark">2</sup><span class="ltx_note_outer"><span class="ltx_note_content"><sup>2</sup><span class="ltx_note_type">footnotemark: </span><span>2</span></span></span></span>.
+            See Figure <a href="#S1.F1" class="ltx_ref"><span class="ltx_text ltx_ref_tag">1</span></a>, then continue with enough article text.
+          </p>
+        </article></body></html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article.ltx_document".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!output.html.contains("ltx_note_outer"), "{}", output.html);
+        assert!(!output.html.contains("footnotemark:"), "{}", output.html);
+        assert!(!output.html.contains("ltx_ref_tag"), "{}", output.html);
+        assert!(output.html.contains("Figure 1, then"), "{}", output.html);
+    }
+
+    #[test]
+    fn standardizes_existing_mathml_without_duplicate_annotation_or_fallback() {
+        let html = r#"
+        <!doctype html>
+        <html><body><article class="post-content">
+          <h1>MathML</h1>
+          <p>Formula
+            <span class="mwe-math-element">
+              <span class="mwe-math-mathml-inline">
+                <math alttext="x^2"><semantics><mrow><msup><mi>x</mi><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">x^2</annotation></semantics></math>
+              </span>
+              <img class="mwe-math-fallback-image-inline" src="/formula.svg" alt="x^2">
+            </span>
+            remains readable with surrounding article prose.
+          </p>
+        </article></body></html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output
+            .html
+            .contains(r#"<math data-latex="x^2" display="inline""#));
+        assert!(output.html.contains("<mrow><msup><mi>x</mi><mn>2</mn>"));
+        assert!(!output.html.contains("<annotation"));
+        assert!(!output.html.contains("mwe-math-fallback-image"));
+        assert!(output.org.contains("$x^2$"), "{}", output.org);
+    }
+
+    #[test]
+    fn standardizes_data_math_and_drops_unrecoverable_mjx_lazy_nodes() {
+        let html = r#"
+        <!doctype html>
+        <html><body><article class="post-content">
+          <h1>Generated math</h1>
+          <p>A formula <span class="math-inline" data-math="\forall x"><span class="katex">rendered duplicate</span></span> remains.</p>
+          <table class="disp-formula"><tr><td><mjx-container><mjx-lazy data-mjx-lazy="1"></mjx-lazy></mjx-container></td></tr></table>
+          <p>Enough surrounding article prose remains after the lazy placeholder.</p>
+        </article></body></html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output
+            .html
+            .contains(r#"<math data-latex="\forall x" display="inline""#));
+        assert!(!output.html.contains("rendered duplicate"));
+        assert!(!output.html.contains("mjx-lazy"));
+        assert!(!output.html.contains("disp-formula"));
+        assert!(output.org.contains(r"$\forall x$"), "{}", output.org);
     }
 
     #[test]
@@ -38121,6 +40661,43 @@ let value = \`tick\`;
     }
 
     #[test]
+    fn low_content_retry_matches_upstream_index_retry_acceptance() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head><title>Retry Case</title></head>
+          <body>
+            <article>
+              <h1>Retry Case</h1>
+              <p>Main article words explain a compact topic clearly with useful context and careful examples for every reader today. Another sentence adds enough substance while staying intentionally short for this regression case.</p>
+              <h2>Subscribe</h2>
+              <p>Subscribe now to receive weekly updates useful tips and practical news delivered directly to your inbox every Friday morning.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/retry".to_string()),
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("** Subscribe"), "{}", output.org);
+        assert!(
+            output
+                .org
+                .contains("Subscribe now to receive weekly updates"),
+            "{}",
+            output.org
+        );
+        assert_eq!(output.word_count, 51, "{}", output.org);
+    }
+
+    #[test]
     fn uses_schema_text_when_it_matches_longer_dom_content() {
         let schema_text = "This is the full post body with enough words to exceed the short article summary that the content scorer will extract. Adding more sentences here to make sure the word count difference is large enough to reliably trigger the schema text fallback path.";
         let html = format!(
@@ -38287,6 +40864,8 @@ let value = \`tick\`;
         .unwrap();
 
         assert!(output.html.contains("full schema-backed post body"));
+        assert!(output.html.contains("Unsafe link"));
+        assert!(!output.html.contains("<a>Unsafe link</a>"));
         assert!(output.html.contains("youtube.com/embed/abc"));
         assert!(output
             .html
@@ -38984,6 +41563,47 @@ let value = \`tick\`;
     }
 
     #[test]
+    fn keeps_legitimate_content_with_comments_in_class_name() {
+        let html = r##"
+        <!doctype html>
+        <html>
+          <head><title>Comments Analysis</title></head>
+          <body>
+            <article>
+              <h1>Comments Analysis</h1>
+              <p>Main article introduction remains visible and provides ordinary prose.</p>
+              <section class="comments-analysis">
+                <h2>How comment systems affect discourse</h2>
+                <p>This is legitimate article analysis, not a reader comments widget. It explains moderation design and community behavior.</p>
+                <a href="/comments-guide">Read the comments guide</a>
+              </section>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/comments".to_string()),
+                content_selector: Some("article".to_string()),
+                remove_partial_selectors: false,
+                remove_exact_selectors: false,
+                remove_low_scoring: false,
+                remove_content_patterns: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output
+            .org
+            .contains("** How comment systems affect discourse"));
+        assert!(output.org.contains("legitimate article analysis"));
+        assert!(output.org.contains("Read the comments guide"));
+    }
+
+    #[test]
     fn removes_see_also_before_mediawiki_references() {
         let html = r##"
         <!doctype html>
@@ -39014,7 +41634,7 @@ let value = \`tick\`;
                 url: Some("https://example.com/wiki/Example_Concept".to_string()),
                 include_images: true,
                 remove_small_images: true,
-                content_selector: None,
+                content_selector: Some("article".to_string()),
                 include_replies: IncludeReplies::Extractors,
                 remove_hidden_elements: true,
                 remove_exact_selectors: true,
@@ -39679,7 +42299,7 @@ let value = \`tick\`;
                 url: None,
                 include_images: true,
                 remove_small_images: true,
-                content_selector: None,
+                content_selector: Some("main".to_string()),
                 include_replies: IncludeReplies::Extractors,
                 remove_hidden_elements: true,
                 remove_exact_selectors: true,

@@ -5,7 +5,7 @@
 :SITE: Jane Smith
 :DOMAIN: example.com
 :LANGUAGE: en
-:WORD_COUNT: 78
+:WORD_COUNT: 74
 :END:
 
 Neural networks are the fundamental building block of modern AI. Let's start with the simplest example: 1 input, 1 parameter, 1 output.

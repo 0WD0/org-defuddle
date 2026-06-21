@@ -1,6 +1,6 @@
 * Product Update
 :PROPERTIES:
-:WORD_COUNT: 45
+:WORD_COUNT: 92
 :END:
 
 This release includes several improvements to image processing.

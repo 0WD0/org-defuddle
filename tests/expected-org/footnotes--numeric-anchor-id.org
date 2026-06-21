@@ -1,7 +1,7 @@
 * Numeric Anchor-ID Footnote Pattern
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 90
+:WORD_COUNT: 72
 :END:
 
 Dietary guidelines were examined in the first study [fn:1] with follow-up findings in subsequent research [fn:2] and a meta-analysis [fn:3].

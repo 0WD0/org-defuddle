@@ -1,6 +1,6 @@
 * MathJax v3 SVG Output
 :PROPERTIES:
-:WORD_COUNT: 37
+:WORD_COUNT: 56
 :END:
 
 ** MathJax v3 SVG rendering

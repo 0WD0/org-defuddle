@@ -8,7 +8,7 @@
 :DESCRIPTION: I'm increasingly certain no one knows anything about anything. Previous founder @ SOOT. Before that was googling. Writes about programming, AI, startups, video games, and misc other things.
 :IMAGE: https://substackcdn.com/image/fetch/$s_!Hs9y!,w_1200,h_675,c_fill,f_jpg,q_auto:good,fl_progressive:steep,g_auto/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fffb5afd7-ffc8-402d-8eaa-4060938fe1d2_1035x449.png
 :LANGUAGE: en
-:WORD_COUNT: 4029
+:WORD_COUNT: 3832
 :END:
 
 This post is part of a series of paper reviews, covering the ~30 papers Ilya Sutskever sent to John Carmack to learn about AI. To see the rest of the reviews, go [[https://theahura.substack.com/p/ilyas-30-papers-to-carmack-table][here]].

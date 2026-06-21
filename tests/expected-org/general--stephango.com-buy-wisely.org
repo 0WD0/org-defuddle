@@ -8,7 +8,7 @@
 :DESCRIPTION: Whenever I buy things I try to prioritize cost per use. Sometimes I consider other priorities such as cost per smile, cost per thrill, cost per externality, ...
 :IMAGE: https://stephango.com/assets/covers/buy-wisely.png
 :LANGUAGE: en
-:WORD_COUNT: 1200
+:WORD_COUNT: 1196
 :END:
 
 Whenever I buy things I try to prioritize /cost per use/. Sometimes I consider other priorities such as /cost per smile/, /cost per thrill/, /cost per externality/, and /cost per lesson/.

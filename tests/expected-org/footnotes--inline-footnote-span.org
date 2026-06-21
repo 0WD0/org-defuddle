@@ -1,7 +1,7 @@
 * Article with Inline Footnotes
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 62
+:WORD_COUNT: 68
 :END:
 
 The field has drifted far from its roots. [fn:1]

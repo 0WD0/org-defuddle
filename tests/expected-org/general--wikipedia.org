@@ -5,7 +5,7 @@
 :SITE: Wikipedia
 :DOMAIN: en.wikipedia.org
 :LANGUAGE: en
-:WORD_COUNT: 739
+:WORD_COUNT: 801
 :END:
 
 *Obsidian* is a [[https://en.wikipedia.org/wiki/Personal_knowledge_management][personal knowledge management]] and [[https://en.wikipedia.org/wiki/Note-taking][note-taking]] [[https://en.wikipedia.org/wiki/Application_software][software application]] that operates on files. [fn:2] It allows users to make internal links for notes and then to visualize the connections as a graph. It is designed to help users organize and structure their thoughts and knowledge in a flexible, non-linear way. [fn:3] The software is free for personal use, with commercial licenses and hosted services such as [[https://en.wikipedia.org/wiki/Obsidian_Publish][Obsidian Publish]] and [[https://en.wikipedia.org/wiki/Obsidian_Sync][Obsidian Sync]] available as paid add-ons. [fn:4]

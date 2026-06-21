@@ -4,7 +4,7 @@
 :SITE: Example Help
 :DOMAIN: publish.example.com
 :LANGUAGE: en
-:WORD_COUNT: 97
+:WORD_COUNT: 110
 :END:
 
 To create a callout, add ~[!info]~ to the first line of a blockquote.

@@ -1,6 +1,6 @@
 * Example Article
 :PROPERTIES:
-:WORD_COUNT: 82
+:WORD_COUNT: 54
 :END:
 
 First paragraph with a sidenote reference. [fn:1] More text continues here.

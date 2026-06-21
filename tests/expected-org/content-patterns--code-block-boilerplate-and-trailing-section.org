@@ -5,7 +5,7 @@
 :SITE: Jane Smith
 :DOMAIN: example.dev
 :LANGUAGE: en
-:WORD_COUNT: 572
+:WORD_COUNT: 566
 :END:
 
 ** Lessons from Building API Integrations

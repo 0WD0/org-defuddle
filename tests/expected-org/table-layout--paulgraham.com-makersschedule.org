@@ -1,6 +1,6 @@
 * Maker's Schedule, Manager's Schedule
 :PROPERTIES:
-:WORD_COUNT: 1158
+:WORD_COUNT: 1148
 :END:
 
 "...the mere consciousness of an engagement will sometimes worry a whole day."

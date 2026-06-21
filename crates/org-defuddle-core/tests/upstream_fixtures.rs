@@ -26,6 +26,8 @@ struct UpstreamReference {
     name: String,
     url: String,
     content: String,
+    #[serde(rename = "wordCount")]
+    word_count: usize,
 }
 
 fn upstream_dir() -> Option<PathBuf> {
@@ -2782,22 +2784,7 @@ fn all_upstream_fixture_metadata_matches_reference() {
 #[test]
 #[ignore = "manual differential gate; build upstream with npm run build:node first"]
 fn all_upstream_fixture_content_matches_exact_org_rendering() {
-    let defuddle_dir =
-        upstream_dir().expect("set ORG_DEFUDDLE_DEFUDDLE_DIR to the pinned defuddle checkout");
-    let script =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/defuddle-reference.mjs");
-    let result = Command::new("node")
-        .arg(&script)
-        .arg(&defuddle_dir)
-        .output()
-        .unwrap_or_else(|err| panic!("failed to run {}: {err}", script.display()));
-    assert!(
-        result.status.success(),
-        "upstream reference runner failed:\n{}",
-        String::from_utf8_lossy(&result.stderr)
-    );
-    let references: Vec<UpstreamReference> = serde_json::from_slice(&result.stdout)
-        .unwrap_or_else(|err| panic!("failed to parse upstream reference output: {err}"));
+    let (defuddle_dir, references) = upstream_references();
     let selected_fixture = std::env::var("ORG_DEFUDDLE_DIFF_FIXTURE").ok();
     assert_eq!(
         references.len(),
@@ -2836,8 +2823,11 @@ fn all_upstream_fixture_content_matches_exact_org_rendering() {
         if actual_org != expected_org {
             if selected_fixture.is_some() {
                 panic!(
-                    "exact upstream-content Org mismatch for {}\n--- expected\n{}\n--- actual\n{}",
-                    reference.name, expected_org, actual_org
+                    "exact upstream-content Org mismatch for {}\n{}\n--- expected\n{}\n--- actual\n{}",
+                    reference.name,
+                    first_org_line_difference(&expected_org, &actual_org),
+                    expected_org,
+                    actual_org
                 );
             }
             mismatches.push(reference.name);
@@ -2976,6 +2966,302 @@ Some example from the Org manual.
     assert!(output.org.contains(",,* Already escaped heading syntax."));
     assert!(output.org.contains(",#+begin_quote"));
     assert!(output.org.contains(",,#+already escaped keyword syntax."));
+}
+
+fn first_org_line_difference(expected: &str, actual: &str) -> String {
+    let expected = expected.lines().collect::<Vec<_>>();
+    let actual = actual.lines().collect::<Vec<_>>();
+    let line = expected
+        .iter()
+        .zip(&actual)
+        .position(|(left, right)| left != right)
+        .unwrap_or_else(|| expected.len().min(actual.len()));
+    let start = line.saturating_sub(2);
+    let end = (line + 3).max(start).min(expected.len().max(actual.len()));
+    let expected = (start..end)
+        .map(|index| format!("{:>5}: {}", index + 1, expected.get(index).unwrap_or(&"")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let actual = (start..end)
+        .map(|index| format!("{:>5}: {}", index + 1, actual.get(index).unwrap_or(&"")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "first differing line: {}\nexpected context:\n{}\nactual context:\n{}",
+        line + 1,
+        expected,
+        actual
+    )
+}
+
+#[test]
+#[ignore = "manual differential gate; build upstream with npm run build:node first"]
+fn all_upstream_fixture_word_counts_match_reference() {
+    let (defuddle_dir, references) = upstream_references();
+    let selected_fixture = std::env::var("ORG_DEFUDDLE_DIFF_FIXTURE").ok();
+    assert_eq!(
+        references.len(),
+        if selected_fixture.is_some() { 1 } else { 202 },
+        "unexpected upstream fixture count"
+    );
+
+    let mut mismatches = Vec::new();
+    for reference in references {
+        let html_path = defuddle_dir
+            .join("tests")
+            .join("fixtures")
+            .join(format!("{}.html", reference.name));
+        let html = std::fs::read_to_string(&html_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", html_path.display()));
+        let output = parse_html_to_org(
+            &html,
+            DefuddleOptions {
+                url: Some(reference.url),
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap_or_else(|err| panic!("failed to parse {}: {err}", reference.name));
+        if output.word_count != reference.word_count {
+            if selected_fixture.is_some() {
+                panic!(
+                    "upstream fixture word-count mismatch for {}: upstream={} actual={} delta={:+}\n{}\n{}\n--- upstream content\n{}\n--- actual html\n{}",
+                    reference.name,
+                    reference.word_count,
+                    output.word_count,
+                    output.word_count as isize - reference.word_count as isize,
+                    word_unit_diff(&reference.content, &output.html),
+                    math_word_count_diff(&reference.content, &output.html),
+                    reference.content,
+                    output.html
+                );
+            }
+            mismatches.push(format!(
+                "{} upstream={} actual={} delta={:+}",
+                reference.name,
+                reference.word_count,
+                output.word_count,
+                output.word_count as isize - reference.word_count as isize
+            ));
+        }
+    }
+
+    assert!(
+        mismatches.is_empty(),
+        "upstream fixture word-count mismatches ({}):\n{}",
+        mismatches.len(),
+        mismatches.join("\n")
+    );
+}
+
+fn math_word_count_diff(upstream_html: &str, actual_html: &str) -> String {
+    let math_re = Regex::new(r#"(?is)<math\b[^>]*data-latex="([^"]*)"[^>]*>.*?</math>"#).unwrap();
+    let upstream = math_re
+        .captures_iter(upstream_html)
+        .map(|captures| {
+            let fragment = captures.get(0).unwrap().as_str();
+            (
+                captures.get(1).unwrap().as_str().to_string(),
+                upstream_word_units(fragment).len(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let actual = math_re
+        .captures_iter(actual_html)
+        .map(|captures| {
+            let fragment = captures.get(0).unwrap().as_str();
+            (
+                captures.get(1).unwrap().as_str().to_string(),
+                upstream_word_units(fragment).len(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let differences = upstream
+        .iter()
+        .zip(&actual)
+        .enumerate()
+        .filter(|(_, ((_, expected), (_, observed)))| expected != observed)
+        .map(|(index, ((latex, expected), (_, observed)))| {
+            format!(
+                "math[{index}] upstream={expected} actual={observed} delta={:+} latex={latex}",
+                *observed as isize - *expected as isize
+            )
+        })
+        .collect::<Vec<_>>();
+    if differences.is_empty() {
+        String::new()
+    } else {
+        format!("math word-count differences:\n{}", differences.join("\n"))
+    }
+}
+
+fn word_unit_diff(upstream_html: &str, actual_html: &str) -> String {
+    let upstream = upstream_word_units(upstream_html);
+    let actual = upstream_word_units(actual_html);
+    let prefix = upstream
+        .iter()
+        .zip(&actual)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let max_suffix = upstream.len().min(actual.len()).saturating_sub(prefix);
+    let suffix = (0..max_suffix)
+        .take_while(|offset| {
+            upstream[upstream.len() - 1 - offset] == actual[actual.len() - 1 - offset]
+        })
+        .count();
+    let upstream_end = upstream.len().saturating_sub(suffix);
+    let actual_end = actual.len().saturating_sub(suffix);
+    format!(
+        "word units: upstream={} actual={} common-prefix={} common-suffix={}\nupstream-only: {}\nactual-only: {}\nlocalized edits:\n{}",
+        upstream.len(),
+        actual.len(),
+        prefix,
+        suffix,
+        summarize_word_units(&upstream[prefix..upstream_end]),
+        summarize_word_units(&actual[prefix..actual_end]),
+        localized_word_unit_edits(&upstream, &actual)
+    )
+}
+
+fn localized_word_unit_edits(upstream: &[String], actual: &[String]) -> String {
+    const LOOKAHEAD: usize = 12;
+    const MAX_EDITS: usize = 20;
+    let mut edits = Vec::new();
+    let mut left = 0usize;
+    let mut right = 0usize;
+    while left < upstream.len() && right < actual.len() && edits.len() < MAX_EDITS {
+        if upstream[left] == actual[right] {
+            left += 1;
+            right += 1;
+            continue;
+        }
+
+        let mut best = None;
+        for left_delta in 0..=LOOKAHEAD.min(upstream.len() - left) {
+            for right_delta in 0..=LOOKAHEAD.min(actual.len() - right) {
+                if left_delta == 0 && right_delta == 0 {
+                    continue;
+                }
+                let next_left = left + left_delta;
+                let next_right = right + right_delta;
+                if next_left >= upstream.len()
+                    || next_right >= actual.len()
+                    || upstream[next_left] != actual[next_right]
+                {
+                    continue;
+                }
+                let score = left_delta + right_delta;
+                if best.map_or(true, |(best_score, _, _)| score < best_score) {
+                    best = Some((score, left_delta, right_delta));
+                }
+            }
+        }
+
+        let Some((_, left_delta, right_delta)) = best else {
+            edits.push(format!(
+                "@{left}/{right} upstream=[{}] actual=[{}]",
+                upstream[left], actual[right]
+            ));
+            left += 1;
+            right += 1;
+            continue;
+        };
+        edits.push(format!(
+            "@{left}/{right} upstream=[{}] actual=[{}]",
+            upstream[left..left + left_delta].join(" | "),
+            actual[right..right + right_delta].join(" | ")
+        ));
+        left += left_delta;
+        right += right_delta;
+    }
+    if left < upstream.len() || right < actual.len() {
+        edits.push(format!(
+            "tail upstream=[{}] actual=[{}]",
+            summarize_word_units(&upstream[left..]),
+            summarize_word_units(&actual[right..])
+        ));
+    }
+    edits.join("\n")
+}
+
+fn summarize_word_units(units: &[String]) -> String {
+    const EDGE: usize = 12;
+    if units.len() <= EDGE * 2 {
+        return units.join(" | ");
+    }
+    format!(
+        "{} | ...({} omitted)... | {}",
+        units[..EDGE].join(" | "),
+        units.len() - EDGE * 2,
+        units[units.len() - EDGE..].join(" | ")
+    )
+}
+
+fn upstream_word_units(html: &str) -> Vec<String> {
+    let tag_re = Regex::new(r"<[^>]*>").unwrap();
+    let decimal_entity_re = Regex::new(r"&#\d+;").unwrap();
+    let named_entity_re = Regex::new(r"&\w+;").unwrap();
+    let text = tag_re.replace_all(html, " ");
+    let text = text
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"");
+    let text = decimal_entity_re.replace_all(&text, " ");
+    let text = named_entity_re.replace_all(&text, " ");
+
+    let mut units = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        if is_audit_cjk(ch) {
+            if !current.is_empty() {
+                units.push(std::mem::take(&mut current));
+            }
+            units.push(ch.to_string());
+        } else if (ch as u32) <= 32 {
+            if !current.is_empty() {
+                units.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        units.push(current);
+    }
+    units
+}
+
+fn is_audit_cjk(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{3040}'..='\u{309f}'
+            | '\u{30a0}'..='\u{30ff}'
+            | '\u{3400}'..='\u{4dbf}'
+            | '\u{4e00}'..='\u{9fff}'
+            | '\u{f900}'..='\u{faff}'
+            | '\u{ac00}'..='\u{d7af}'
+    )
+}
+
+fn upstream_references() -> (PathBuf, Vec<UpstreamReference>) {
+    let defuddle_dir =
+        upstream_dir().expect("set ORG_DEFUDDLE_DEFUDDLE_DIR to the pinned defuddle checkout");
+    let script =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/defuddle-reference.mjs");
+    let result = Command::new("node")
+        .arg(&script)
+        .arg(&defuddle_dir)
+        .output()
+        .unwrap_or_else(|err| panic!("failed to run {}: {err}", script.display()));
+    assert!(
+        result.status.success(),
+        "upstream reference runner failed:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let references = serde_json::from_slice(&result.stdout)
+        .unwrap_or_else(|err| panic!("failed to parse upstream reference output: {err}"));
+    (defuddle_dir, references)
 }
 
 fn upstream_fixture_names(defuddle_dir: &std::path::Path) -> Vec<String> {

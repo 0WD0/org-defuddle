@@ -1,7 +1,7 @@
 * Sample Python Tutorial
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 27
+:WORD_COUNT: 21
 :END:
 
 *** Imports

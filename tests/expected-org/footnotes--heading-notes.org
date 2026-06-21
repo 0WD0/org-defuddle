@@ -1,6 +1,6 @@
 * Loose footnotes: heading delimiter
 :PROPERTIES:
-:WORD_COUNT: 29
+:WORD_COUNT: 28
 :END:
 
 The first observation is notable. [fn:1]

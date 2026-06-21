@@ -1,6 +1,5 @@
-// Kept in the same order as defuddle's PARTIAL_SELECTORS so upstream matches
-// take precedence in diagnostics. The compatibility tail preserves broader
-// patterns that org-defuddle supported before importing the complete list.
+// Kept in the same order as defuddle's PARTIAL_SELECTORS. The two JavaScript
+// lookbehinds are represented by plain patterns and enforced in lib.rs.
 pub(crate) const PATTERNS: &[&str] = &[
     r#"a-statement"#,
     r#"access-wall"#,
@@ -544,24 +543,4 @@ pub(crate) const PATTERNS: &[&str] = &[
     r#"window__widget"#,
     r#"w-form-done"#,
     r#"w-form-fail"#,
-    r#"ad-"#,
-    r#"ads"#,
-    r#"banner"#,
-    r#"cookie"#,
-    r#"comment"#,
-    r#"copyright"#,
-    r#"header"#,
-    r#"login"#,
-    r#"menu"#,
-    r#"nav"#,
-    r#"newsletter"#,
-    r#"pagination"#,
-    r#"promo"#,
-    r#"share"#,
-    r#"sidebar"#,
-    r#"social"#,
-    r#"subscribe"#,
-    r#"tag"#,
-    r#"toc"#,
-    r#"widget"#,
 ];

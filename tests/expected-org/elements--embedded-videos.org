@@ -1,6 +1,6 @@
 * Embedded videos test
 :PROPERTIES:
-:WORD_COUNT: 20
+:WORD_COUNT: 19
 :END:
 
 A YouTube video:

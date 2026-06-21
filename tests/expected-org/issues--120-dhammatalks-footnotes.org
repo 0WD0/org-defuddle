@@ -5,7 +5,7 @@
 :DOMAIN: 120-dhammatalks-footnotes
 :IMAGE: https://120-dhammatalks-footnotes/static/images/fb-logo.png
 :LANGUAGE: en
-:WORD_COUNT: 2214
+:WORD_COUNT: 2202
 :END:
 
 ** The Shorter Craving-Destruction Discourse Cūḷa Taṇhāsaṅkhaya Sutta (MN 37)

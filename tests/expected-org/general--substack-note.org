@@ -7,7 +7,7 @@
 :DESCRIPTION: Sample note text for testing the Substack extractor.
 :IMAGE: https://example.com/image/full-res.jpg
 :LANGUAGE: en
-:WORD_COUNT: 25
+:WORD_COUNT: 19
 :END:
 
 Sample note text for testing the Substack extractor.

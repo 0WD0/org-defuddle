@@ -8,7 +8,7 @@
 :DESCRIPTION: The iPhone 16e is an iPhone for people who don’t want to think much about their phone. But they *do* want an iPhone, not just any “whatever” phone. A just plain iPhone, with a good screen, good enough (and simple) camera, and great battery life.
 :IMAGE: https://daringfireball.net/graphics/df-wide-card.png
 :LANGUAGE: en
-:WORD_COUNT: 1997
+:WORD_COUNT: 1954
 :END:
 
 I’ve spent the last six days using the iPhone 16e, and the experience has been a throwback. In many ways, the iPhone 16e both looks and feels like the modern-day progeny of the early Steve Jobs era iPhones. Early iPhones like the plastic 3G and 3GS, and the glass-back/metal-sides 4 and 4S were simpler offerings. Two colors, black and white. Single-lens inconspicuous cameras. The iPhone 16e feels like their direct descendent.

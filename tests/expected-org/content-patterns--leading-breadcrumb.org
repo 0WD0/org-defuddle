@@ -1,7 +1,7 @@
 * Sample Newsletter Post
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 226
+:WORD_COUNT: 227
 :END:
 
 Not a shadowing day or research interview — a real job.

@@ -33,6 +33,7 @@ for (const file of fixtureFiles) {
 		name,
 		url,
 		content: response.content,
+		wordCount: response.wordCount,
 	});
 }
 

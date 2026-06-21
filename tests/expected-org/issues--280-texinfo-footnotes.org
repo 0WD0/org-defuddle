@@ -3,7 +3,7 @@
 :URL: https://www.example.org/software/widget/manual/html_node/Introduction.html
 :DOMAIN: example.org
 :DESCRIPTION: Introduction (Widget)
-:WORD_COUNT: 335
+:WORD_COUNT: 308
 :END:
 
 ** 1 Introduction

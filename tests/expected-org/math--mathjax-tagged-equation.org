@@ -1,7 +1,7 @@
 * Tagged Equation Test
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 54
+:WORD_COUNT: 63
 :END:
 
 A tagged single equation produced by ~\tag{}~ is wrapped by MathJax in an ~mtable~ with a single ~mlabeledtr~. It should stay on one horizontal line, not collapse into a vertical stack.

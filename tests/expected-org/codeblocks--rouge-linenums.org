@@ -1,7 +1,7 @@
 * Sample C++ Post
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 64
+:WORD_COUNT: 51
 :END:
 
 *** User-friendly assert in C++26

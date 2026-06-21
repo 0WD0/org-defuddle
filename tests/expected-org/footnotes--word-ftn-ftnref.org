@@ -1,6 +1,6 @@
 * Word HTML footnotes: _ftn/_ftnref pattern
 :PROPERTIES:
-:WORD_COUNT: 35
+:WORD_COUNT: 34
 :END:
 
 The initiative is aligned with the Action Plan [fn:1], a community-led alternative to traditional publishing.

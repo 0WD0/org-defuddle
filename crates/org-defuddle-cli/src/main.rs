@@ -60,6 +60,12 @@ where
     S: Into<String>,
 {
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
+    if let Some(output) = informational_output(&args) {
+        stdout
+            .write_all(format!("{output}\n").as_bytes())
+            .map_err(|err| err.to_string())?;
+        return Ok(());
+    }
     if args.first().is_some_and(|command| command == "fetch") {
         let options = parse_fetch_args(args.into_iter().skip(1))?;
         return run_fetch(&options, stdout);
@@ -88,8 +94,34 @@ where
     Ok(())
 }
 
+fn informational_output(args: &[String]) -> Option<String> {
+    match args {
+        [flag] if matches!(flag.as_str(), "-h" | "--help") => Some(usage()),
+        [flag] if matches!(flag.as_str(), "-V" | "--version") => {
+            Some(env!("CARGO_PKG_VERSION").to_string())
+        }
+        [command, rest @ ..]
+            if command == "parse"
+                && rest
+                    .iter()
+                    .any(|arg| matches!(arg.as_str(), "-h" | "--help")) =>
+        {
+            Some(parse_usage())
+        }
+        [command, rest @ ..]
+            if command == "fetch"
+                && rest
+                    .iter()
+                    .any(|arg| matches!(arg.as_str(), "-h" | "--help")) =>
+        {
+            Some(fetch_usage())
+        }
+        _ => None,
+    }
+}
+
 fn run_fetch(options: &FetchOptions, stdout: &mut dyn Write) -> Result<(), String> {
-    let url = options.url.as_deref().ok_or_else(|| fetch_usage())?;
+    let url = options.url.as_deref().ok_or_else(fetch_usage)?;
     let user_agent = options.user_agent.as_deref().unwrap_or(DEFAULT_UA);
     let body = fetch_body(
         url,
@@ -385,13 +417,15 @@ fn fetch_body(
 ) -> Result<String, String> {
     let env = |name: &str| std::env::var(name).ok();
     fetch_body_with_env(
-        source,
-        method,
-        headers,
-        data,
-        user_agent,
-        language,
-        require_html,
+        FetchRequest {
+            source,
+            method,
+            headers,
+            data,
+            user_agent,
+            language,
+            require_html,
+        },
         &env,
     )
 }
@@ -404,57 +438,66 @@ fn fetch_page_with_env(
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, String> {
     fetch_body_with_env(
-        source,
-        "GET",
-        &[(
-            "Accept".to_string(),
-            "text/html,application/xhtml+xml".to_string(),
-        )],
-        None,
-        user_agent,
-        language,
-        true,
+        FetchRequest {
+            source,
+            method: "GET",
+            headers: &[(
+                "Accept".to_string(),
+                "text/html,application/xhtml+xml".to_string(),
+            )],
+            data: None,
+            user_agent,
+            language,
+            require_html: true,
+        },
         env,
     )
 }
 
-fn fetch_body_with_env(
-    source: &str,
-    method: &str,
-    headers: &[(String, String)],
-    data: Option<&str>,
-    user_agent: &str,
-    language: Option<&str>,
+struct FetchRequest<'a> {
+    source: &'a str,
+    method: &'a str,
+    headers: &'a [(String, String)],
+    data: Option<&'a str>,
+    user_agent: &'a str,
+    language: Option<&'a str>,
     require_html: bool,
+}
+
+fn fetch_body_with_env(
+    fetch: FetchRequest<'_>,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, String> {
     let mut builder = ureq::AgentBuilder::new()
         .timeout(FETCH_TIMEOUT)
         .redirects(10)
         .try_proxy_from_env(false);
-    if let Some(proxy) = proxy_for_source(source, env) {
+    if let Some(proxy) = proxy_for_source(fetch.source, env) {
         if let Ok(proxy) = ureq::Proxy::new(&proxy) {
             builder = builder.proxy(proxy);
         }
     }
     let agent = builder.build();
     let mut request = agent
-        .request(method, source)
-        .set("User-Agent", user_agent)
+        .request(fetch.method, fetch.source)
+        .set("User-Agent", fetch.user_agent)
         .set("Accept", "*/*");
-    for (name, value) in headers {
+    for (name, value) in fetch.headers {
         request = request.set(name, value);
     }
-    if let Some(language) = language.filter(|language| !language.trim().is_empty()) {
+    if let Some(language) = fetch
+        .language
+        .filter(|language| !language.trim().is_empty())
+    {
         request = request.set("Accept-Language", language.trim());
     }
 
-    let response = if let Some(data) = data {
+    let response = if let Some(data) = fetch.data {
         request.send_string(data).map_err(fetch_error_message)?
     } else {
         request.call().map_err(fetch_error_message)?
     };
-    if require_html {
+    if fetch.require_html {
         validate_fetch_response(&response)?;
     } else {
         validate_fetch_length(&response)?;
@@ -1064,6 +1107,22 @@ mod tests {
             )])),
             debug: None,
             profile: None,
+        }
+    }
+
+    #[test]
+    fn help_and_version_are_successful_informational_commands() {
+        for (args, expected) in [
+            (vec!["--help"], "Usage: org-defuddle parse"),
+            (vec!["--version"], env!("CARGO_PKG_VERSION")),
+            (vec!["parse", "--help"], "Usage: org-defuddle parse"),
+            (vec!["fetch", "--help"], "Usage: org-defuddle fetch"),
+        ] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            run(args, &mut stdout, &mut stderr).unwrap();
+            assert!(String::from_utf8(stdout).unwrap().contains(expected));
+            assert!(stderr.is_empty());
         }
     }
 

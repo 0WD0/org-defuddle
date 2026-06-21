@@ -16,29 +16,12 @@ fn init(_: &Env) -> Result<()> {
 
 #[defun(name = "parse-json")]
 fn parse_json(html: String, url: String) -> Result<String> {
-    let output = parse_output(
-        &html,
-        url,
-        true,
-        true,
-        String::new(),
-        IncludeReplies::Extractors,
-        true,
-        true,
-        true,
-        true,
-        true,
-        true,
-        false,
-        false,
-        false,
-        false,
-        false,
-    )?;
+    let output = parse_default_output(&html, url, false)?;
     output_json_string_for_html(&output, &html).map_err(|err| emacs::Error::msg(err.to_string()))
 }
 
 #[defun(name = "parse-json-with-options")]
+#[allow(clippy::too_many_arguments)] // Positional arguments are part of the Emacs module ABI.
 fn parse_json_with_options(
     html: String,
     url: String,
@@ -82,53 +65,18 @@ fn parse_json_with_options(
 
 #[defun(name = "parse-org")]
 fn parse_org(html: String, url: String) -> Result<String> {
-    let output = parse_output(
-        &html,
-        url,
-        true,
-        true,
-        String::new(),
-        IncludeReplies::Extractors,
-        true,
-        true,
-        true,
-        true,
-        true,
-        true,
-        false,
-        false,
-        false,
-        false,
-        false,
-    )?;
+    let output = parse_default_output(&html, url, false)?;
     Ok(output.org)
 }
 
 #[defun(name = "parse-property")]
 fn parse_property(html: String, url: String, property: String) -> Result<String> {
-    let output = parse_output(
-        &html,
-        url,
-        true,
-        true,
-        String::new(),
-        IncludeReplies::Extractors,
-        true,
-        true,
-        true,
-        true,
-        true,
-        true,
-        false,
-        false,
-        false,
-        false,
-        property_requests_markdown(&property),
-    )?;
+    let output = parse_default_output(&html, url, property_requests_markdown(&property))?;
     property_value(&output, &property)
 }
 
 #[defun(name = "parse-org-with-options")]
+#[allow(clippy::too_many_arguments)] // Positional arguments are part of the Emacs module ABI.
 fn parse_org_with_options(
     html: String,
     url: String,
@@ -171,6 +119,7 @@ fn parse_org_with_options(
 }
 
 #[defun(name = "parse-property-with-options")]
+#[allow(clippy::too_many_arguments)] // Positional arguments are part of the Emacs module ABI.
 fn parse_property_with_options(
     html: String,
     url: String,
@@ -263,29 +212,15 @@ fn parse_fxtwitter_org(json: String, url: String) -> Result<String> {
 
 #[defun(name = "bilibili-video-info")]
 fn bilibili_video_info_json(view_json: String, url: String) -> Result<String> {
-    let info = bilibili_video_info(
-        &view_json,
-        if url.trim().is_empty() {
-            None
-        } else {
-            Some(url.as_str())
-        },
-    )
-    .map_err(|err| emacs::Error::msg(err.to_string()))?;
+    let info = bilibili_video_info(&view_json, nonempty(&url))
+        .map_err(|err| emacs::Error::msg(err.to_string()))?;
     serde_json::to_string(&info).map_err(|err| emacs::Error::msg(err.to_string()))
 }
 
 #[defun(name = "bilibili-subtitle-info")]
 fn bilibili_subtitle_info_json(player_json: String, preferred_language: String) -> Result<String> {
-    let info = bilibili_subtitle_info(
-        &player_json,
-        if preferred_language.trim().is_empty() {
-            None
-        } else {
-            Some(preferred_language.as_str())
-        },
-    )
-    .map_err(|err| emacs::Error::msg(err.to_string()))?;
+    let info = bilibili_subtitle_info(&player_json, nonempty(&preferred_language))
+        .map_err(|err| emacs::Error::msg(err.to_string()))?;
     serde_json::to_string(&info).map_err(|err| emacs::Error::msg(err.to_string()))
 }
 
@@ -313,15 +248,8 @@ fn parse_bilibili_org(
 
 #[defun(name = "youtube-caption-info")]
 fn youtube_caption_info_json(player_json: String, preferred_language: String) -> Result<String> {
-    let info = youtube_caption_info(
-        &player_json,
-        if preferred_language.trim().is_empty() {
-            None
-        } else {
-            Some(preferred_language.as_str())
-        },
-    )
-    .map_err(|err| emacs::Error::msg(err.to_string()))?;
+    let info = youtube_caption_info(&player_json, nonempty(&preferred_language))
+        .map_err(|err| emacs::Error::msg(err.to_string()))?;
     serde_json::to_string(&info).map_err(|err| emacs::Error::msg(err.to_string()))
 }
 
@@ -331,20 +259,8 @@ fn youtube_inline_caption_info_json(
     url: String,
     preferred_language: String,
 ) -> Result<String> {
-    let info = youtube_inline_caption_info(
-        &html,
-        if url.trim().is_empty() {
-            None
-        } else {
-            Some(url.as_str())
-        },
-        if preferred_language.trim().is_empty() {
-            None
-        } else {
-            Some(preferred_language.as_str())
-        },
-    )
-    .map_err(|err| emacs::Error::msg(err.to_string()))?;
+    let info = youtube_inline_caption_info(&html, nonempty(&url), nonempty(&preferred_language))
+        .map_err(|err| emacs::Error::msg(err.to_string()))?;
     serde_json::to_string(&info).map_err(|err| emacs::Error::msg(err.to_string()))
 }
 
@@ -384,6 +300,7 @@ fn parse_youtube_org(
     Ok(output.org)
 }
 
+#[allow(clippy::too_many_arguments)] // Central adapter for the positional Emacs module ABI.
 fn parse_output(
     html: &str,
     url: String,
@@ -406,18 +323,10 @@ fn parse_output(
     parse_html_to_org(
         html,
         DefuddleOptions {
-            url: if url.trim().is_empty() {
-                None
-            } else {
-                Some(url)
-            },
+            url: nonempty_string(url),
             include_images,
             remove_small_images,
-            content_selector: if content_selector.trim().is_empty() {
-                None
-            } else {
-                Some(content_selector)
-            },
+            content_selector: nonempty_string(content_selector),
             include_replies,
             remove_hidden_elements,
             remove_exact_selectors,
@@ -435,40 +344,43 @@ fn parse_output(
     .map_err(|err| emacs::Error::msg(err.to_string()))
 }
 
-fn parse_c2_output(json: &str, url: String) -> Result<DefuddleOutput> {
-    parse_c2_wiki_json_to_org(
-        json,
-        if url.trim().is_empty() {
-            None
-        } else {
-            Some(url.as_str())
+fn parse_default_output(
+    html: &str,
+    url: String,
+    separate_markdown: bool,
+) -> Result<DefuddleOutput> {
+    parse_html_to_org(
+        html,
+        DefuddleOptions {
+            url: nonempty_string(url),
+            separate_markdown,
+            ..DefuddleOptions::default()
         },
     )
     .map_err(|err| emacs::Error::msg(err.to_string()))
+}
+
+fn nonempty(value: &str) -> Option<&str> {
+    (!value.trim().is_empty()).then_some(value)
+}
+
+fn nonempty_string(value: String) -> Option<String> {
+    (!value.trim().is_empty()).then_some(value)
+}
+
+fn parse_c2_output(json: &str, url: String) -> Result<DefuddleOutput> {
+    parse_c2_wiki_json_to_org(json, nonempty(&url))
+        .map_err(|err| emacs::Error::msg(err.to_string()))
 }
 
 fn parse_x_oembed_output(json: &str, url: String) -> Result<DefuddleOutput> {
-    parse_x_oembed_json_to_org(
-        json,
-        if url.trim().is_empty() {
-            None
-        } else {
-            Some(url.as_str())
-        },
-    )
-    .map_err(|err| emacs::Error::msg(err.to_string()))
+    parse_x_oembed_json_to_org(json, nonempty(&url))
+        .map_err(|err| emacs::Error::msg(err.to_string()))
 }
 
 fn parse_fxtwitter_output(json: &str, url: String) -> Result<DefuddleOutput> {
-    parse_fxtwitter_json_to_org(
-        json,
-        if url.trim().is_empty() {
-            None
-        } else {
-            Some(url.as_str())
-        },
-    )
-    .map_err(|err| emacs::Error::msg(err.to_string()))
+    parse_fxtwitter_json_to_org(json, nonempty(&url))
+        .map_err(|err| emacs::Error::msg(err.to_string()))
 }
 
 fn parse_bilibili_output(
@@ -479,21 +391,9 @@ fn parse_bilibili_output(
 ) -> Result<DefuddleOutput> {
     parse_bilibili_api_to_org(
         view_json,
-        if subtitle_json.trim().is_empty() {
-            None
-        } else {
-            Some(subtitle_json)
-        },
-        if url.trim().is_empty() {
-            None
-        } else {
-            Some(url.as_str())
-        },
-        if language_code.trim().is_empty() {
-            None
-        } else {
-            Some(language_code.as_str())
-        },
+        nonempty(subtitle_json),
+        nonempty(&url),
+        nonempty(&language_code),
     )
     .map_err(|err| emacs::Error::msg(err.to_string()))
 }
@@ -507,26 +407,10 @@ fn parse_youtube_output(
 ) -> Result<DefuddleOutput> {
     parse_youtube_api_to_org(
         player_json,
-        if caption_xml.trim().is_empty() {
-            None
-        } else {
-            Some(caption_xml)
-        },
-        if chapters_json.trim().is_empty() {
-            None
-        } else {
-            Some(chapters_json)
-        },
-        if url.trim().is_empty() {
-            None
-        } else {
-            Some(url.as_str())
-        },
-        if language_code.trim().is_empty() {
-            None
-        } else {
-            Some(language_code.as_str())
-        },
+        nonempty(caption_xml),
+        nonempty(chapters_json),
+        nonempty(&url),
+        nonempty(&language_code),
     )
     .map_err(|err| emacs::Error::msg(err.to_string()))
 }

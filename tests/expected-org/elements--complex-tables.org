@@ -2,7 +2,7 @@
 :PROPERTIES:
 :AUTHOR: Jordan Lee
 :SITE: Jordan Lee
-:WORD_COUNT: 119
+:WORD_COUNT: 117
 :END:
 
 We measured the response latency of several popular frameworks under realistic workloads. Here are the results:

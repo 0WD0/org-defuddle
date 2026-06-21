@@ -1,7 +1,7 @@
 * Raw LaTeX Math Delimiters
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 123
+:WORD_COUNT: 95
 :END:
 
 The attention mechanism computes $h_{i}^{\ell+1} = \text{Attention} \left( Q^{\ell} h_{i}^{\ell}, K^{\ell} h_{j}^{\ell}, V^{\ell} h_{j}^{\ell} \right)$ for each node in the graph.

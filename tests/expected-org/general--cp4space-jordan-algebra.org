@@ -7,7 +7,7 @@
 :DOMAIN: cp4space.hatsya.com
 :DESCRIPTION: In the early 1930s, Pascual Jordan attempted to formalise the algebraic properties of Hermitian matrices.
 :LANGUAGE: en-US
-:WORD_COUNT: 733
+:WORD_COUNT: 910
 :END:
 
 In the early 1930s, Pascual Jordan attempted to formalise the algebraic properties of Hermitian matrices. In particular:

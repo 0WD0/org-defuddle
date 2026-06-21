@@ -1,7 +1,7 @@
 * MathJax CHTML without assistive MathML
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 130
+:WORD_COUNT: 148
 :END:
 
 ** Group estimation strategies

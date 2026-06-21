@@ -4,7 +4,7 @@
 :DOMAIN: example.com
 :DESCRIPTION: List of premium apartments currently for sale.
 :LANGUAGE: vi
-:WORD_COUNT: 537
+:WORD_COUNT: 538
 :END:
 
 ** PREMIUM APARTMENTS FOR SALE

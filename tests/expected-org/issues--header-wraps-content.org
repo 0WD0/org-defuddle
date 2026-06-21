@@ -3,7 +3,7 @@
 :AUTHOR: Jane Smith
 :SITE: Example Blog
 :LANGUAGE: en
-:WORD_COUNT: 252
+:WORD_COUNT: 251
 :END:
 
 A few weeks ago, a major cloud provider published a post about rewriting a popular framework with AI in one week. One engineer and an AI model reimplemented the full API surface. Cost about $1,100 in tokens.

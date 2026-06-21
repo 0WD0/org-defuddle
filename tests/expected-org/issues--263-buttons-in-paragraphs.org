@@ -3,7 +3,7 @@
 :URL: https://leetcode.com/problems/longest-special-sequence/description
 :SITE: LeetCode
 :DOMAIN: leetcode.com
-:WORD_COUNT: 49
+:WORD_COUNT: 50
 :END:
 
 Given a string ~s~, return /the longest/ /special/ /subsequence/ in ~s~.

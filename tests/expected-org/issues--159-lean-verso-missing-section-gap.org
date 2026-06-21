@@ -3,7 +3,7 @@
 :URL: https://lean-lang.org/theorem_proving_in_lean4/Dependent-Type-Theory/
 :DOMAIN: lean-lang.org
 :LANGUAGE: en
-:WORD_COUNT: 44
+:WORD_COUNT: 49
 :END:
 
 This fixture verifies we preserve an intentional blank line between adjacent Verso code fragments when one fragment ends with an extra newline before the next section header.

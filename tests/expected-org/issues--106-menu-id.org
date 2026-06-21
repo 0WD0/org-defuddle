@@ -1,7 +1,7 @@
 * Restaurant Menu Page
 :PROPERTIES:
 :DESCRIPTION: Our restaurant menu with appetizers, main courses, and desserts.
-:WORD_COUNT: 64
+:WORD_COUNT: 66
 :END:
 
 ** Our Restaurant

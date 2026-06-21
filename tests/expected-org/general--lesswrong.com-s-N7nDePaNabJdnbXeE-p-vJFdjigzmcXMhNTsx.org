@@ -7,7 +7,7 @@
 :DOMAIN: lesswrong.com
 :DESCRIPTION: This post explores the concept of simulators in AI, particularly self-supervised models like GPT. Janus argues that GPT and similar models are best u…
 :IMAGE: https://res.cloudinary.com/lesswrong-2-0/image/upload/c_fill,ar_1.91,g_auto/v1/mirroredImages/splashArtImagePromptA%20marionette%20theater%20with%20multiple%20puppeteers%20manipulating%20different%20characters/kehilmgftixxsfu9txcb
-:WORD_COUNT: 13035
+:WORD_COUNT: 13133
 :END:
 
 /Thanks to Chris Scammell, Adam Shimi, Lee Sharkey, Evan Hubinger, Nicholas Dupuis, Leo Gao, Johannes Treutlein, and Jonathan Low for feedback on drafts./

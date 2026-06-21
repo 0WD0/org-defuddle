@@ -1,6 +1,6 @@
 * Hidden Footnotes Section
 :PROPERTIES:
-:WORD_COUNT: 39
+:WORD_COUNT: 44
 :END:
 
 ** PC Gamer Recommends RSS Readers

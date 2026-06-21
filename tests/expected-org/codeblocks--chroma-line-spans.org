@@ -1,6 +1,6 @@
 * Chroma Code Block
 :PROPERTIES:
-:WORD_COUNT: 23
+:WORD_COUNT: 26
 :END:
 
 #+begin_src go

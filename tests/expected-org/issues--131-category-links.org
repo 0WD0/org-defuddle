@@ -2,7 +2,7 @@
 :PROPERTIES:
 :URL: https://131-category-links/
 :DOMAIN: 131-category-links
-:WORD_COUNT: 30
+:WORD_COUNT: 31
 :END:
 
 This is the main content of the blog post about web development.

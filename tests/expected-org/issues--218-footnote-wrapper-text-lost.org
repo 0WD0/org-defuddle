@@ -3,7 +3,7 @@
 :URL: https://example.org/articles/footnotes-in-wrapper-spans
 :DOMAIN: example.org
 :LANGUAGE: en
-:WORD_COUNT: 119
+:WORD_COUNT: 121
 :END:
 
 First paragraph with enough content to ensure stable extraction. This text discusses various topics and provides a baseline for the content scoring algorithm to work with.

@@ -1,7 +1,7 @@
 * MathJax math/tex Script Elements
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 89
+:WORD_COUNT: 109
 :END:
 
 We call these energy differences $E_u$ and $E_l$ (subscripts refer to "upper" and "lower"), or in units of frequency, $f_u$ and $f_l$ (where $E_{l,u} = hf_{l,u}$).

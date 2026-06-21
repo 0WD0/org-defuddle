@@ -8,7 +8,7 @@
 :DESCRIPTION: I work at Voodoo, a French company that creates mobile video games. We have a lot of challenges with performance, availability, and scalabil
 :IMAGE: https://miro.medium.com/max/1200/1*EO-pr4RolgcAOj_Uk1rpDA.png
 :LANGUAGE: en
-:WORD_COUNT: 391
+:WORD_COUNT: 290
 :END:
 
 [[https://medium.com/@vincentvallet?source=post_page-----d6e62af173e2----------------------][https://miro.medium.com/fit/c/96/96/1*vFTVh_mYyf0p6m7f77A3vw.jpeg]]

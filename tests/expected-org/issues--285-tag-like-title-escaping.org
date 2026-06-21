@@ -3,7 +3,7 @@
 :URL: https://www.example.com/blog/
 :DOMAIN: example.com
 :LANGUAGE: en
-:WORD_COUNT: 101
+:WORD_COUNT: 98
 :END:
 
 This is a list of blog posts. One of the titles contains angle brackets that look like an HTML tag, which must be escaped so a Markdown reader does not treat it as raw HTML and swallow everything that follows it on the page.

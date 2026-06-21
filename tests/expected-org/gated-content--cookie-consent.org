@@ -3,7 +3,7 @@
 :AUTHOR: Jane Reporter
 :SITE: Jane Reporter
 :LANGUAGE: en
-:WORD_COUNT: 281
+:WORD_COUNT: 282
 :END:
 
 The company on Thursday began removing advertisements from attorneys seeking clients that claim to have been harmed by their product.

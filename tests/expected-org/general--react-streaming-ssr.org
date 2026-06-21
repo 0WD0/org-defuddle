@@ -5,7 +5,7 @@
 :SITE: Jane Smith
 :DESCRIPTION: A deep dive into how modern widget systems work under the hood.
 :LANGUAGE: en
-:WORD_COUNT: 221
+:WORD_COUNT: 223
 :END:
 
 ** Understanding Widget Architecture

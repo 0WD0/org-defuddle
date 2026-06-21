@@ -3,7 +3,7 @@
 :URL: https://katex-centraliser/
 :DOMAIN: katex-centraliser
 :LANGUAGE: en
-:WORD_COUNT: 522
+:WORD_COUNT: 585
 :END:
 
 Time taken by KaTeX to render formulæ: 8 ms [[https://katex-centraliser/centraliser.pdf][PDF version]]

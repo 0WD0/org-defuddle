@@ -4,7 +4,7 @@
 :SITE: X (Twitter)
 :IMAGE: https://example.com/media/placeholder.jpg?format=jpg&name=large
 :LANGUAGE: en
-:WORD_COUNT: 69
+:WORD_COUNT: 57
 :END:
 
 Lorem Ipsum Dolor Sit Amet

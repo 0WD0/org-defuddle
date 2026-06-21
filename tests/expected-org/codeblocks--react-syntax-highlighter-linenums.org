@@ -1,7 +1,7 @@
 * Sample Java Post
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 69
+:WORD_COUNT: 60
 :END:
 
 *** BuildConfig example

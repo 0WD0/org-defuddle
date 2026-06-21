@@ -2,7 +2,7 @@
 :PROPERTIES:
 :SITE: Portfolio
 :DESCRIPTION: Researcher and developer portfolio
-:WORD_COUNT: 202
+:WORD_COUNT: 205
 :END:
 
 Researcher and developer focused on distributed systems and machine learning infrastructure. Building tools that help teams ship faster.

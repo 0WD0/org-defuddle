@@ -1,7 +1,7 @@
 * MathJax v3 with MathML input and HTML output
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 261
+:WORD_COUNT: 393
 :END:
 
 ** MathJax v3 beta: MathML input, HTML output test

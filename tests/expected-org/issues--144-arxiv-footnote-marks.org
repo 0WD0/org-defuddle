@@ -1,7 +1,7 @@
 * arXiv Footnote Marks
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 33
+:WORD_COUNT: 35
 :END:
 
 ** Authors

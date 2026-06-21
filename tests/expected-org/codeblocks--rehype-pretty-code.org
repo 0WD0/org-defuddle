@@ -3,7 +3,7 @@
 :AUTHOR: Dan Abramov
 :SITE: Dan Abramov
 :DESCRIPTION: Test for rehype-pretty-code data-line spans
-:WORD_COUNT: 120
+:WORD_COUNT: 122
 :END:
 
 Some intro text here to make the article long enough for defuddle to pick it up as content. This is a test article with enough words to pass the word count threshold. We need to make sure defuddle picks this up properly so we can test the code block behavior with rehype-pretty-code output.

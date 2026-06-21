@@ -1,7 +1,7 @@
 * Placeholder topic
 :PROPERTIES:
 :SITE: Wikipedia
-:WORD_COUNT: 121
+:WORD_COUNT: 125
 :END:
 
 The placeholder topic is a widely studied subject in modern research. It was first described in the early twentieth century by several independent scholars. [fn:1]

@@ -2,7 +2,7 @@
 :PROPERTIES:
 :SITE: MDN
 :DESCRIPTION: The Array object enables storing a collection of multiple items under a single variable name.
-:WORD_COUNT: 357
+:WORD_COUNT: 340
 :END:
 
 ** Array

@@ -3,7 +3,7 @@
 :URL: https://gemini.google.com/app
 :DOMAIN: gemini.google.com
 :LANGUAGE: en
-:WORD_COUNT: 13
+:WORD_COUNT: 44
 :END:
 
 *** Predicate Logic

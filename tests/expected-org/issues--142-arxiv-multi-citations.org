@@ -1,7 +1,7 @@
 * arXiv Multi-Citations
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 130
+:WORD_COUNT: 139
 :END:
 
 ** Introduction

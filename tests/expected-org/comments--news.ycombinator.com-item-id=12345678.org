@@ -5,7 +5,7 @@
 :PUBLISHED: 2025-01-15
 :SITE: Hacker News
 :DOMAIN: news.ycombinator.com
-:WORD_COUNT: 120
+:WORD_COUNT: 83
 :END:
 
 [[https://example.com/article][https://example.com/article]]

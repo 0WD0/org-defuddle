@@ -2,7 +2,7 @@
 :PROPERTIES:
 :URL: https://www.example.org/cheatsheet.html
 :DOMAIN: example.org
-:WORD_COUNT: 90
+:WORD_COUNT: 84
 :END:
 
 ** Overview of the editor's shortcuts

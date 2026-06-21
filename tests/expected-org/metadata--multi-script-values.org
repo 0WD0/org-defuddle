@@ -7,7 +7,7 @@
 :DOMAIN: news.example.org
 :DESCRIPTION: مقال عن الذكاء الاصطناعي ومستقبله في العالم العربي.
 :LANGUAGE: zh-Hans
-:WORD_COUNT: 27
+:WORD_COUNT: 98
 :END:
 
 人工智能（AI）正在改变我们的世界。从自动驾驶汽车到医疗诊断，人工智能的应用无处不在。

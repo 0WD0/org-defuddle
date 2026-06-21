@@ -4,7 +4,7 @@
 :PUBLISHED: 2025-01-01T00:00:00+00:00
 :DOMAIN: example.com
 :LANGUAGE: en
-:WORD_COUNT: 74
+:WORD_COUNT: 72
 :END:
 
 Sorting algorithms are fundamental to computer science. The most widely used general-purpose sorting algorithm is Quicksort, discovered in 1962.

@@ -1,7 +1,7 @@
 * Temml Math Test
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 78
+:WORD_COUNT: 104
 :END:
 
 A variety of Temml-rendered math elements using the ~hurmet-tex~ pattern.

@@ -2,7 +2,7 @@
 :PROPERTIES:
 :DESCRIPTION: The SCP Foundation's 'top-secret' archives, declassified for your enjoyment.
 :LANGUAGE: en
-:WORD_COUNT: 233
+:WORD_COUNT: 237
 :END:
 
 [[https://scp-wiki.wdfiles.com/local--files/scp-9935/baseballbanner.jpg][baseballbanner.jpg]]

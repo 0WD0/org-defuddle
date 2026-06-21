@@ -5,7 +5,7 @@
 :PUBLISHED: 2025-06-15
 :SITE: Hacker News
 :DOMAIN: news.ycombinator.com
-:WORD_COUNT: 35
+:WORD_COUNT: 31
 :END:
 
 *testuser* · 2025-06-15

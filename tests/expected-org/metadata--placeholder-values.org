@@ -6,7 +6,7 @@
 :DOMAIN: blog.example.com
 :DESCRIPTION: A post demonstrating that defuddle falls back past placeholder metadata values.
 :LANGUAGE: en
-:WORD_COUNT: 65
+:WORD_COUNT: 61
 :END:
 
 Some CMSes leave unresolved template literals like the ones in this page's meta tags. Defuddle should skip over these and fall back to the next valid source.

@@ -2,7 +2,7 @@
 :PROPERTIES:
 :URL: https://example.com/code-tutorial
 :DOMAIN: example.com
-:WORD_COUNT: 41
+:WORD_COUNT: 42
 :END:
 
 ** Getting user input

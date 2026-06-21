@@ -3,7 +3,7 @@
 :URL: https://news.ycombinator.com/news
 :SITE: Hacker News
 :DOMAIN: news.ycombinator.com
-:WORD_COUNT: 150
+:WORD_COUNT: 82
 :END:
 
 1. [[https://example.com/building-a-database-from-scratch][Building a Database from Scratch in Rust]] (example.com)

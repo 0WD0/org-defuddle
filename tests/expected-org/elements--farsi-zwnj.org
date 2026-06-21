@@ -4,7 +4,7 @@
 :SITE: Obsidian
 :DESCRIPTION: آشنایی با افزونه Bases برای ایجاد نمای پایگاه‌داده از یادداشت‌ها
 :LANGUAGE: fa
-:WORD_COUNT: 123
+:WORD_COUNT: 105
 :END:
 
 ** مقدمه

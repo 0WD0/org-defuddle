@@ -12,6 +12,9 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  DEFUDDLE_UPSTREAM_COMMIT: 19520add09282abdfadbc6d23eb6bf8393af2bf8
+
 jobs:
   prepare:
     runs-on: macos-latest
@@ -19,6 +22,7 @@ jobs:
       contents: write
     outputs:
       tag: ${{ steps.version.outputs.tag }}
+      release_ref: ${{ steps.commit.outputs.release_ref }}
 
     steps:
       - uses: actions/checkout@v4
@@ -27,6 +31,8 @@ jobs:
           ref: main
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - uses: actions/setup-node@v4
         with:
@@ -76,7 +82,10 @@ jobs:
 
       - name: Check out upstream fixtures
         run: |
-          git clone --depth 1 https://github.com/kepano/defuddle.git /private/tmp/defuddle-elisp-source
+          git init /private/tmp/defuddle-elisp-source
+          git -C /private/tmp/defuddle-elisp-source remote add origin https://github.com/kepano/defuddle.git
+          git -C /private/tmp/defuddle-elisp-source fetch --depth 1 origin "${DEFUDDLE_UPSTREAM_COMMIT}"
+          git -C /private/tmp/defuddle-elisp-source checkout --detach FETCH_HEAD
           npm --prefix /private/tmp/defuddle-elisp-source ci
           npm --prefix /private/tmp/defuddle-elisp-source run build:node
 
@@ -85,19 +94,23 @@ jobs:
           ORG_DEFUDDLE_DEFUDDLE_DIR: /private/tmp/defuddle-elisp-source
         run: |
           set -euo pipefail
+          rustup toolchain install 1.80.0 --profile minimal
+          cargo +1.80.0 check --workspace --locked
           cargo fmt --all -- --check
-          cargo test --workspace
-          cargo test -p org-defuddle-core --test upstream_fixtures \
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo test --workspace --locked
+          cargo test -p org-defuddle-core --test upstream_fixtures --locked \
             all_upstream_fixture_content_matches_exact_org_rendering \
             -- --ignored
-          cargo build --release -p org-defuddle-module
-          cargo build --release -p org-defuddle-cli
+          cargo build --release -p org-defuddle-module --locked
+          cargo build --release -p org-defuddle-cli --locked
           emacs -Q --batch -L . -L test \
             -l test/org-defuddle-test.el \
             -f ert-run-tests-batch-and-exit
           emacs -Q --batch --eval '(byte-compile-file "org-defuddle.el")'
 
-      - name: Commit and tag release
+      - name: Commit release version
+        id: commit
         shell: bash
         env:
           TAG: ${{ steps.version.outputs.tag }}
@@ -111,8 +124,7 @@ jobs:
             git commit -m "Release ${TAG}"
             git push origin HEAD:main
           fi
-          git tag -a "${TAG}" -m "Release ${TAG}"
-          git push origin "${TAG}"
+          echo "release_ref=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
 
   build:
     needs: prepare
@@ -132,7 +144,7 @@ jobs:
             module_asset: liborg-defuddle-x86_64-apple-darwin.dylib
             cli_bin: org-defuddle
             cli_asset: org-defuddle-cli-x86_64-apple-darwin
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             module_lib: liborg_defuddle_module.so
             module_asset: liborg-defuddle-x86_64-unknown-linux-gnu.so
@@ -156,20 +168,69 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.tag }}
+          ref: ${{ needs.prepare.outputs.release_ref }}
 
       - uses: dtolnay/rust-toolchain@stable
+        if: runner.os != 'Linux'
         with:
           targets: ${{ matrix.target }}
 
-      - name: Build release assets
-        run: cargo build --release --target ${{ matrix.target }} -p org-defuddle-module -p org-defuddle-cli
+      - name: Build macOS or Windows release assets
+        if: runner.os != 'Linux'
+        run: cargo build --release --target ${{ matrix.target }} -p org-defuddle-module -p org-defuddle-cli --locked
+
+      - name: Build Linux release assets on Ubuntu 20.04
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          docker run --rm \
+            --env TARGET \
+            --volume "${GITHUB_WORKSPACE}:/work" \
+            --workdir /work \
+            ubuntu:20.04 \
+            bash -lc '
+              set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends build-essential ca-certificates curl
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --profile minimal --default-toolchain 1.80.0
+              . "${HOME}/.cargo/env"
+              cargo build --release --target "${TARGET}" \
+                -p org-defuddle-module -p org-defuddle-cli --locked
+            '
 
       - name: Rename release assets
         shell: bash
         run: |
           cp "target/${{ matrix.target }}/release/${{ matrix.module_lib }}" "${{ matrix.module_asset }}"
           cp "target/${{ matrix.target }}/release/${{ matrix.cli_bin }}" "${{ matrix.cli_asset }}"
+
+      - uses: purcell/setup-emacs@master
+        if: runner.os == 'Linux'
+        with:
+          version: 30.2
+
+      - name: Verify Linux module through Emacs
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          MODULE_ASSET: ${{ matrix.module_asset }}
+        run: |
+          emacs -Q --batch -L . --eval '
+            (progn
+              (require (quote org-defuddle))
+              (setq org-defuddle-module-file (expand-file-name (getenv "MODULE_ASSET"))
+                    org-defuddle--module-loaded nil)
+              (org-defuddle-load-module)
+              (unless (string-match-p
+                       "Linux release module works"
+                       (org-defuddle-html-to-org
+                        "<article><p>Linux release module works.</p></article>"
+                        "https://example.com/module-smoke"))
+                (error "Linux release module smoke test failed")))'
 
       - name: Upload release assets
         uses: actions/upload-artifact@v4
@@ -188,6 +249,11 @@ jobs:
       contents: write
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.release_ref }}
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -196,6 +262,30 @@ jobs:
       - name: Generate checksums
         working-directory: artifacts
         run: sha256sum * > SHA256SUMS
+
+      - name: Create release tag
+        shell: bash
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_REF: ${{ needs.prepare.outputs.release_ref }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --tags origin
+          if git rev-parse --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+            existing="$(git rev-list -n 1 "refs/tags/${TAG}")"
+            expected="$(git rev-parse "${RELEASE_REF}")"
+            if [[ "${existing}" == "${expected}" ]]; then
+              echo "Tag ${TAG} already points at ${expected}; reusing it"
+              exit 0
+            fi
+            echo "Tag ${TAG} already exists at ${existing}, expected ${expected}" >&2
+            exit 1
+          fi
+          git tag -a "${TAG}" "${RELEASE_REF}" -m "Release ${TAG}"
+          git push origin "${TAG}"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2

@@ -1,7 +1,7 @@
 * Article with Time Elements
 :PROPERTIES:
 :PUBLISHED: 2025-01-15
-:WORD_COUNT: 155
+:WORD_COUNT: 154
 :END:
 
 This article explores how time elements should be handled in content extraction. When a standalone time element appears at the beginning or end of an article, it typically represents metadata like publication dates. These should be removed from the extracted content since they duplicate information already captured in the article metadata.

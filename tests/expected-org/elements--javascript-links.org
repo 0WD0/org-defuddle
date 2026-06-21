@@ -1,6 +1,6 @@
 * JavaScript Links Test
 :PROPERTIES:
-:WORD_COUNT: 55
+:WORD_COUNT: 57
 :END:
 
 This has a simple js link in a sentence.

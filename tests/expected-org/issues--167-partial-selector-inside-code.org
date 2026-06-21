@@ -3,7 +3,7 @@
 :URL: https://example.org/docs/type-theory
 :DOMAIN: example.org
 :LANGUAGE: en
-:WORD_COUNT: 87
+:WORD_COUNT: 93
 :END:
 
 This page defines helper functions for working with natural numbers. The code blocks below use span elements with generated anchor IDs that happen to match partial selector patterns like "next-".

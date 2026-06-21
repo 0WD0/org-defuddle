@@ -3,7 +3,7 @@
 :URL: https://www.example.com/reference/types/size_t
 :DOMAIN: example.com
 :LANGUAGE: en
-:WORD_COUNT: 139
+:WORD_COUNT: 136
 :END:
 
 ** example::size_t

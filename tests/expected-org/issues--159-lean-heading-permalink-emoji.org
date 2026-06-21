@@ -3,7 +3,7 @@
 :URL: https://lean-lang.org/theorem_proving_in_lean4/Dependent-Type-Theory/
 :DOMAIN: lean-lang.org
 :LANGUAGE: en
-:WORD_COUNT: 49
+:WORD_COUNT: 48
 :END:
 
 This fixture verifies that heading permalink widgets are removed from heading text while preserving the heading title itself. The extra prose ensures stable content selection.

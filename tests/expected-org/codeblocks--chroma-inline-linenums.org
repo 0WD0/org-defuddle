@@ -1,7 +1,7 @@
 * Sample Python Post
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 41
+:WORD_COUNT: 31
 :END:
 
 *** RSA example

@@ -3,7 +3,7 @@
 :URL: https://lean-lang.org/theorem_proving_in_lean4/Dependent-Type-Theory/
 :DOMAIN: lean-lang.org
 :LANGUAGE: en
-:WORD_COUNT: 37
+:WORD_COUNT: 40
 :END:
 
 This fixture ensures empty Verso code blocks are preserved as blank lines when adjacent Lean command and output fragments are merged.

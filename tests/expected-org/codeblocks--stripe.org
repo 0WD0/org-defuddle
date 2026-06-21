@@ -2,7 +2,7 @@
 :PROPERTIES:
 :SITE: Stripe Documentation
 :DESCRIPTION: Use x402 for machine-to-machine payments.
-:WORD_COUNT: 165
+:WORD_COUNT: 170
 :END:
 
 ** Use x402 for machine-to-machine payments.

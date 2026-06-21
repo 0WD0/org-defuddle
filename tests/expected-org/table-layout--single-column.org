@@ -1,7 +1,7 @@
 * My Homepage
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 30
+:WORD_COUNT: 32
 :END:
 
 ** Welcome

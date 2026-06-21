@@ -1,7 +1,7 @@
 * Article with WordPress Block Footnotes
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 114
+:WORD_COUNT: 117
 :END:
 
 The national response exists: Project Alpha, funded at 700 million euros in the latest budget. But analysts judge it "far too weak against the scale of foreign technology." [fn:1] The figures are staggering: major tech firms have invested over 700 billion euros in artificial intelligence in recent years.

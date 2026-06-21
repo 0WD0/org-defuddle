@@ -6,7 +6,7 @@
 :SITE: X (Twitter)
 :DOMAIN: x.com
 :LANGUAGE: zh-Hans
-:WORD_COUNT: 29
+:WORD_COUNT: 22
 :END:
 
 Main post from a localized X interface.

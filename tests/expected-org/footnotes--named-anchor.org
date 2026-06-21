@@ -1,7 +1,7 @@
 * Essay on Architecture
 :PROPERTIES:
 :LANGUAGE: en
-:WORD_COUNT: 183
+:WORD_COUNT: 184
 :END:
 
 The early Christian basilica established the fundamental plan that would define sacred architecture for centuries. [fn:1]

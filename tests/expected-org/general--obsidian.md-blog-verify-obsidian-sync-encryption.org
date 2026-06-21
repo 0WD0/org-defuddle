@@ -6,7 +6,7 @@
 :DESCRIPTION: How can you be sure that your data is end-to-end encrypted? In this guide, we provide step-by-step instructions to trustlessly verify the end-to-end encryption of your data using Obsidian Sync.
 :IMAGE: https://obsidian.md/images/banner.png
 :LANGUAGE: en
-:WORD_COUNT: 837
+:WORD_COUNT: 789
 :END:
 
 On our [[https://obsidian.md][About page]], we describe the guiding principles that have shaped Obsidian since the start. Privacy is one of these principles, and we go to great lengths to make sure we can uphold this statement:

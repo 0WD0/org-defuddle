@@ -2,7 +2,7 @@
 :PROPERTIES:
 :URL: https://example.com/articles/guide.htm
 :DOMAIN: example.com
-:WORD_COUNT: 1418
+:WORD_COUNT: 1422
 :END:
 
 *** Dr. A. Researcher, March 2015

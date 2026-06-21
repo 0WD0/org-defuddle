@@ -4,7 +4,7 @@
 :SITE: Example
 :DOMAIN: example.com
 :LANGUAGE: en
-:WORD_COUNT: 87
+:WORD_COUNT: 85
 :END:
 
 Date: Wed, 08 Apr 2026

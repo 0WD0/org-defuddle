@@ -1,6 +1,6 @@
 * Testing Patterns
 :PROPERTIES:
-:WORD_COUNT: 73
+:WORD_COUNT: 77
 :END:
 
 This pattern language [fn:1] describes a new approach. It avoids the common problems with testing and provides better reliability.

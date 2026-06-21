@@ -4,7 +4,7 @@
 ;; SPDX-License-Identifier: MIT
 
 ;; Author: Lucius Chen
-;; Version: 0.1.3
+;; Version: 0.1.4
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: hypermedia, outlines, tools
 
@@ -102,7 +102,7 @@
   (file-name-directory (or load-file-name buffer-file-name default-directory))
   "Directory containing org-defuddle.el.")
 
-(defconst org-defuddle--module-version "v0.1.3"
+(defconst org-defuddle--module-version "v0.1.4"
   "GitHub release containing the native module required by this package.")
 
 (defconst org-defuddle--github-release-url
